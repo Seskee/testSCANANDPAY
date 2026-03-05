@@ -1,0 +1,753 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 0 0% 3.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 0 0% 3.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 0 0% 3.9%;
+    --primary: 0 0% 9%;
+    --primary-foreground: 0 0% 98%;
+    --secondary: 0 0% 96.1%;
+    --secondary-foreground: 0 0% 9%;
+    --muted: 0 0% 96.1%;
+    --muted-foreground: 0 0% 45.1%;
+    --accent: 0 0% 96.1%;
+    --accent-foreground: 0 0% 9%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 0 0% 89.8%;
+    --input: 0 0% 89.8%;
+    --ring: 0 0% 3.9%;
+    --chart-1: 12 76% 61%;
+    --chart-2: 173 58% 39%;
+    --chart-3: 197 37% 24%;
+    --chart-4: 43 74% 66%;
+    --chart-5: 27 87% 67%;
+    --radius: 0.5rem;
+  }
+  .dark {
+    --background: 0 0% 3.9%;
+    --foreground: 0 0% 98%;
+    --card: 0 0% 3.9%;
+    --card-foreground: 0 0% 98%;
+    --popover: 0 0% 3.9%;
+    --popover-foreground: 0 0% 98%;
+    --primary: 0 0% 98%;
+    --primary-foreground: 0 0% 9%;
+    --secondary: 0 0% 14.9%;
+    --secondary-foreground: 0 0% 98%;
+    --muted: 0 0% 14.9%;
+    --muted-foreground: 0 0% 63.9%;
+    --accent: 0 0% 14.9%;
+    --accent-foreground: 0 0% 98%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 0 0% 14.9%;
+    --input: 0 0% 14.9%;
+    --ring: 0 0% 83.1%;
+    --chart-1: 220 70% 50%;
+    --chart-2: 160 60% 45%;
+    --chart-3: 30 80% 55%;
+    --chart-4: 280 65% 60%;
+    --chart-5: 340 75% 55%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+    font-family: 'DM Sans', sans-serif;
+    font-weight: 400;
+  }
+  html {
+    margin: 0;
+    padding: 0;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-family: 'DM Sans', sans-serif;
+    font-weight: 400;
+    overflow-x: hidden;
+    margin: 0;
+    padding: 0;
+  }
+  #root {
+    margin: 0;
+    padding: 0;
+  }
+
+  /* Ensure all heading elements use Regular 400 weight unless explicitly overridden */
+  h1, h2, h3, h4, h5, h6 {
+    font-family: 'DM Sans', sans-serif;
+    font-weight: 400;
+  }
+
+  /* Ensure all input, button, and form elements use DM Sans Regular 400 */
+  input, button, textarea, select, label {
+    font-family: 'DM Sans', sans-serif;
+    font-weight: 400;
+  }
+
+  /* Ensure all interactive elements use DM Sans Regular 400 */
+  a, span, p, div {
+    font-family: 'DM Sans', sans-serif;
+  }
+}
+
+@keyframes pencil-underline {
+  0% {
+    stroke-dasharray: 0 100;
+    opacity: 0;
+  }
+  50% {
+    opacity: 1;
+  }
+  100% {
+    stroke-dasharray: 100 0;
+    opacity: 1;
+  }
+}
+
+@keyframes hand-drawn-underline {
+  0% {
+    width: 0%;
+    opacity: 0;
+  }
+  20% {
+    opacity: 1;
+  }
+  100% {
+    width: 100%;
+    opacity: 1;
+  }
+}
+
+@keyframes scribble-underline {
+  0% {
+    clip-path: polygon(0 0, 0 0, 0 100%, 0% 100%);
+  }
+  100% {
+    clip-path: polygon(0 0, 100% 0, 100% 100%, 0% 100%);
+  }
+}
+
+.animated-underline {
+  position: relative;
+  display: inline-block;
+}
+
+.animated-underline::after {
+  content: '';
+  position: absolute;
+  bottom: -2px;
+  left: 0;
+  width: 0;
+  height: 3px;
+  background: linear-gradient(90deg, #3b82f6, #8b5cf6, #06b6d4);
+  border-radius: 2px;
+  animation: hand-drawn-underline 1.5s ease-out forwards;
+  animation-delay: 2s;
+}
+
+.animated-underline-fast::after {
+  animation-delay: 2.5s;
+}
+
+.animated-underline-steps::after {
+  animation-delay: 3s;
+}
+
+@keyframes qr-scan {
+  0%, 100% {
+    transform: translateY(-100%);
+    opacity: 0;
+  }
+  50% {
+    transform: translateY(0%);
+    opacity: 1;
+  }
+}
+
+@keyframes qr-glow {
+  0%, 100% {
+    box-shadow: 0 0 5px rgba(59, 130, 246, 0.3);
+  }
+  50% {
+    box-shadow: 0 0 20px rgba(59, 130, 246, 0.6);
+  }
+}
+
+@keyframes phone-vibrate {
+  0%, 100% {
+    transform: translateX(0);
+  }
+  25% {
+    transform: translateX(-1px) rotate(-1deg);
+  }
+  75% {
+    transform: translateX(1px) rotate(1deg);
+  }
+}
+
+@keyframes wave {
+  0%, 100% {
+    d: path("M0,10 Q50,0 100,10 T200,10");
+  }
+  50% {
+    d: path("M0,10 Q50,20 100,10 T200,10");
+  }
+}
+
+/* Handwritten underline effect */
+.handwritten-underline {
+  position: relative;
+  display: inline-block;
+}
+
+.handwritten-underline::after {
+  content: '';
+  position: absolute;
+  bottom: -4px;
+  left: -2px;
+  right: -2px;
+  height: 2px;
+  background-image: linear-gradient(90deg,
+    transparent 0%,
+    currentColor 10%,
+    currentColor 90%,
+    transparent 100%
+  );
+  opacity: 0.6;
+  transform: scaleX(0);
+  transform-origin: left center;
+  animation: handwritten-draw 0.8s ease-out 1s forwards;
+}
+
+@keyframes handwritten-draw {
+  0% {
+    transform: scaleX(0);
+    opacity: 0;
+  }
+  50% {
+    opacity: 0.6;
+  }
+  100% {
+    transform: scaleX(1);
+    opacity: 0.6;
+  }
+}
+
+/* Subtle typewriter effect for italic text */
+.typewriter-subtle {
+  display: inline-block;
+  animation: subtle-typewriter 0.05s steps(1) 2.5s both;
+}
+
+@keyframes subtle-typewriter {
+  from {
+    opacity: 0.8;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Curved hand-drawn underline animation */
+.curved-underline {
+  position: relative;
+  display: inline-block;
+}
+
+.curved-underline svg {
+  position: absolute;
+  left: -2%;
+  bottom: -8px;
+  width: 104%;
+  height: 18px;
+  pointer-events: none;
+}
+
+.curved-underline svg path {
+  fill: none;
+  stroke: #e74c3c;
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 350;
+  stroke-dashoffset: 350;
+  animation: draw-underline-smooth 1.5s ease-out 2.5s forwards;
+  filter: url(#hand-drawn-filter);
+}
+
+@keyframes draw-underline-smooth {
+  0% {
+    stroke-dashoffset: 350;
+  }
+  100% {
+    stroke-dashoffset: 0;
+  }
+}
+
+/* Soft scroll snapping */
+.scroll-snap-container {
+  scroll-snap-type: y proximity;
+  scroll-behavior: smooth;
+}
+
+.scroll-snap-section {
+  scroll-snap-align: start;
+  scroll-snap-stop: normal;
+}
+
+/* Hover micro-interactions - Desktop only */
+@media (hover: hover) and (pointer: fine) {
+  .hover-text-primary {
+    transition: color 200ms ease-out;
+  }
+
+  .hover-text-primary:hover {
+    color: rgb(15 23 42); /* slate-900 */
+  }
+
+  .hover-text-secondary {
+    transition: opacity 200ms ease-out;
+  }
+
+  .hover-text-secondary:hover {
+    opacity: 1;
+  }
+
+  .hover-cta-button {
+    transition: background-color 200ms ease-out, transform 90ms ease-out;
+  }
+
+  .hover-cta-button:hover {
+    filter: brightness(0.95);
+  }
+
+  .hover-cta-button:active {
+    transform: scale(0.98);
+  }
+}
+
+/* Editorial underline animation for specific words */
+.editorial-underline-word {
+  position: relative;
+  display: inline-block;
+  white-space: nowrap;
+}
+
+.editorial-underline-word svg {
+  position: absolute;
+  left: -2%;
+  bottom: -6px;
+  width: 104%;
+  height: 16px;
+  pointer-events: none;
+  opacity: 0;
+}
+
+.editorial-underline-word[data-word="remember"] svg path,
+.editorial-underline-word[data-word="never"] svg path,
+.editorial-underline-word[data-word="instant"] svg path {
+  fill: none;
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 250;
+  stroke-dashoffset: 250;
+  filter: url(#editorial-filter);
+}
+
+/* Different colors for each statement */
+.editorial-underline-word[data-word="remember"] svg path {
+  stroke: #c9a96e; /* Muted gold tone for emotion/memory */
+}
+
+.editorial-underline-word[data-word="never"] svg path {
+  stroke: #5fb57d; /* Fresh green for service/speed */
+}
+
+.editorial-underline-word[data-word="instant"] svg path {
+  stroke: #4a90a4; /* Deep teal for freedom/trust */
+}
+
+/* Scroll-driven animations - triggered individually */
+.editorial-underline-word[data-word="remember"].animate-in svg {
+  animation: editorial-underline-draw 2s ease-out 0ms forwards;
+}
+
+.editorial-underline-word[data-word="never"].animate-in svg {
+  animation: editorial-underline-draw 2s ease-out 0ms forwards;
+}
+
+.editorial-underline-word[data-word="instant"].animate-in svg {
+  animation: editorial-underline-draw 2s ease-out 0ms forwards;
+}
+
+@keyframes editorial-underline-draw {
+  0% {
+    opacity: 0;
+  }
+  10% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+.editorial-underline-word[data-word="remember"].animate-in svg path {
+  animation: editorial-path-draw 2s ease-out 0ms forwards;
+}
+
+.editorial-underline-word[data-word="never"].animate-in svg path {
+  animation: editorial-path-draw 2s ease-out 0ms forwards;
+}
+
+.editorial-underline-word[data-word="instant"].animate-in svg path {
+  animation: editorial-path-draw 2s ease-out 0ms forwards;
+}
+
+@keyframes editorial-path-draw {
+  0% {
+    stroke-dashoffset: 250;
+  }
+  100% {
+    stroke-dashoffset: 0;
+  }
+}
+
+/* Mobile responsive - thinner stroke */
+@media (max-width: 768px) {
+  .editorial-underline-word[data-word="remember"] svg path,
+  .editorial-underline-word[data-word="never"] svg path,
+  .editorial-underline-word[data-word="instant"] svg path {
+    stroke-width: 2;
+  }
+
+  .editorial-underline-word svg {
+    bottom: -4px;
+    height: 14px;
+  }
+}
+
+/* Glassmorphism card styles */
+.glass-card {
+  background: rgba(255, 255, 255, 0.4);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.15);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.glass-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 12px 40px 0 rgba(31, 38, 135, 0.2);
+  background: rgba(255, 255, 255, 0.5);
+}
+
+/* Abstract gradient backgrounds for card visuals */
+.card-visual-time {
+  background: linear-gradient(135deg, rgba(168, 85, 247, 0.2) 0%, rgba(59, 130, 246, 0.2) 100%);
+  position: relative;
+  overflow: hidden;
+}
+
+.card-visual-time::before {
+  content: '';
+  position: absolute;
+  width: 200%;
+  height: 200%;
+  background: linear-gradient(45deg, transparent 30%, rgba(255, 255, 255, 0.3) 50%, transparent 70%);
+  animation: shimmer 3s infinite;
+}
+
+.card-visual-tips {
+  background: linear-gradient(135deg, rgba(251, 191, 36, 0.25) 0%, rgba(245, 158, 11, 0.25) 100%);
+  position: relative;
+  overflow: hidden;
+}
+
+.card-visual-tips::after {
+  content: '';
+  position: absolute;
+  width: 80px;
+  height: 80px;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.4) 0%, transparent 70%);
+  border-radius: 50%;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  animation: glow-pulse 2s ease-in-out infinite;
+}
+
+.card-visual-turnover {
+  background: linear-gradient(135deg, rgba(34, 197, 94, 0.2) 0%, rgba(16, 185, 129, 0.2) 100%);
+  position: relative;
+  overflow: hidden;
+}
+
+.card-visual-turnover::before {
+  content: '';
+  position: absolute;
+  width: 100%;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.6), transparent);
+  top: 30%;
+  animation: scan-line 2s ease-in-out infinite;
+}
+
+.card-visual-reviews {
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.2) 0%, rgba(168, 85, 247, 0.2) 100%);
+  position: relative;
+  overflow: hidden;
+}
+
+.card-visual-reviews::after {
+  content: '★';
+  position: absolute;
+  font-size: 80px;
+  color: rgba(255, 255, 255, 0.2);
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  animation: star-rotate 4s linear infinite;
+}
+
+@keyframes shimmer {
+  0% {
+    transform: translateX(-50%) translateY(-50%) rotate(45deg);
+  }
+  100% {
+    transform: translateX(50%) translateY(50%) rotate(45deg);
+  }
+}
+
+@keyframes glow-pulse {
+  0%, 100% {
+    opacity: 0.6;
+    transform: translate(-50%, -50%) scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1.1);
+  }
+}
+
+@keyframes scan-line {
+  0%, 100% {
+    top: 20%;
+    opacity: 0;
+  }
+  50% {
+    top: 70%;
+    opacity: 1;
+  }
+}
+
+@keyframes star-rotate {
+  0% {
+    transform: translate(-50%, -50%) rotate(0deg) scale(1);
+    opacity: 0.2;
+  }
+  50% {
+    opacity: 0.3;
+  }
+  100% {
+    transform: translate(-50%, -50%) rotate(360deg) scale(1);
+    opacity: 0.2;
+  }
+}
+
+/* Text reveal animation for For Guests cards */
+.text-reveal {
+  display: inline-block;
+  opacity: 0;
+  animation: reveal-char 0.05s ease-out forwards;
+}
+
+@keyframes reveal-char {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Guest benefit card abstract visuals - Meaningful visual metaphors */
+
+/* Card 1: Pay in seconds - Flowing progress line → checkmark (speed without stress) */
+.card-visual-guest-1 {
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.12) 0%, rgba(147, 197, 253, 0.18) 100%);
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Card 2: Split the bill - One shape dividing into multiple parts (clean and friendly) */
+.card-visual-guest-2 {
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.12) 0%, rgba(196, 181, 253, 0.18) 100%);
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Card 3: Leave when you're ready - Open door / fading path (freedom, no urgency) */
+.card-visual-guest-3 {
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.12) 0%, rgba(110, 231, 183, 0.18) 100%);
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Card 4: One scan - Single QR-like shape with pulse/ripple (minimal, confident) */
+.card-visual-guest-4 {
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.12) 0%, rgba(251, 191, 36, 0.18) 100%);
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Visual icon animation - simple fade-in only */
+.guest-visual-icon {
+  opacity: 0;
+  animation: icon-fade-in 0.5s ease-out 0.5s forwards;
+}
+
+@keyframes icon-fade-in {
+  to {
+    opacity: 1;
+  }
+}
+
+
+/* Heartbeat pulse animation for "Pulse" word */
+.heartbeat-pulse {
+  display: inline-block;
+  color: #8b4049;
+  animation: heartbeat 2.4s ease-in-out infinite;
+}
+
+.heartbeat-pulse.in-view {
+  animation: heartbeat 2.4s ease-in-out infinite;
+}
+
+.heartbeat-pulse.out-of-view {
+  animation: heartbeat-slow 4s ease-in-out infinite;
+}
+
+@keyframes heartbeat {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  10% {
+    transform: scale(1.08);
+    opacity: 0.95;
+  }
+  20% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  30% {
+    transform: scale(1.05);
+    opacity: 0.97;
+  }
+  40%, 90% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+@keyframes heartbeat-slow {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  8% {
+    transform: scale(1.04);
+    opacity: 0.98;
+  }
+  16% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  24% {
+    transform: scale(1.025);
+    opacity: 0.99;
+  }
+  32%, 90% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+/* Respect reduced motion preferences */
+@media (prefers-reduced-motion: reduce) {
+  .curved-underline svg path {
+    animation-duration: 0.5s;
+    animation-delay: 0s;
+  }
+
+  .editorial-underline-word svg,
+  .editorial-underline-word svg path {
+    animation-duration: 0.4s !important;
+    animation-delay: 0s !important;
+  }
+
+  .glass-card {
+    transition: none;
+  }
+
+  .glass-card:hover {
+    transform: none;
+  }
+
+  .card-visual-time::before,
+  .card-visual-tips::after,
+  .card-visual-turnover::before,
+  .card-visual-reviews::after {
+    animation: none !important;
+  }
+
+  .guest-visual-icon {
+    opacity: 1 !important;
+    animation: none !important;
+  }
+
+  .text-reveal {
+    animation: none !important;
+    opacity: 1 !important;
+  }
+
+  .heartbeat-pulse {
+    animation: none !important;
+  }
+
+  * {
+    animation-duration: 0.3s !important;
+    transition-duration: 0.1s !important;
+  }
+
+  .scroll-snap-container {
+    scroll-snap-type: none;
+  }
+}

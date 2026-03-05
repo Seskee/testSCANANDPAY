@@ -1,0 +1,99 @@
+require('dotenv').config();
+const { connectDB } = require('../config/database');
+const Bill = require('../models/Bill');
+const Restaurant = require('../models/Restaurant');
+
+async function createTestBillTable3() {
+  try {
+    console.log('\n========================================');
+    console.log('Creating Test Bill for Table 3');
+    console.log('========================================\n');
+
+    // Connect to database
+    await connectDB();
+    console.log('✅ Database connected\n');
+
+    // Find the most recent restaurant
+    const restaurant = await Restaurant.findOne().sort({ createdAt: -1 });
+
+    if (!restaurant) {
+      console.log('❌ No restaurant found. Please register a restaurant first.');
+      process.exit(1);
+    }
+
+    console.log(`Found restaurant: ${restaurant.name} (ID: ${restaurant._id})\n`);
+
+    // Create a test bill for table 3 with different items
+    const bill = new Bill({
+      restaurant: restaurant._id,
+      tableNumber: 3,
+      items: [
+        {
+          name: 'BBQ Ribs',
+          price: 22.99,
+          quantity: 1,
+          isPaid: false
+        },
+        {
+          name: 'Coleslaw',
+          price: 5.99,
+          quantity: 1,
+          isPaid: false
+        },
+        {
+          name: 'Onion Rings',
+          price: 7.99,
+          quantity: 1,
+          isPaid: false
+        },
+        {
+          name: 'Iced Tea',
+          price: 3.99,
+          quantity: 2,
+          isPaid: false
+        },
+        {
+          name: 'Apple Pie',
+          price: 8.99,
+          quantity: 1,
+          isPaid: false
+        }
+      ],
+      status: 'active',
+      payments: []
+    });
+
+    await bill.save();
+
+    console.log('✅ Test bill for Table 3 created successfully!\n');
+    console.log('Bill Details:');
+    console.log(`  Bill ID: ${bill._id}`);
+    console.log(`  Restaurant: ${restaurant.name}`);
+    console.log(`  Table Number: ${bill.tableNumber}`);
+    console.log(`  Total Items: ${bill.items.length}`);
+    console.log(`  Total Amount: $${bill.totalAmount.toFixed(2)}`);
+    console.log(`  Status: ${bill.status}\n`);
+
+    console.log('Items:');
+    bill.items.forEach((item, index) => {
+      console.log(`  ${index + 1}. ${item.name} - $${item.price.toFixed(2)} x ${item.quantity}`);
+    });
+
+    console.log('\n========================================');
+    console.log('✅ TEST BILL CREATED SUCCESSFULLY');
+    console.log('========================================\n');
+    console.log(`You can now test payments at:`);
+    console.log(`https://preview-10skelzj.ui.pythagora.ai/pay?restaurant=${restaurant._id}&table=3\n`);
+
+    process.exit(0);
+  } catch (error) {
+    console.error('\n❌ Error creating test bill:');
+    console.error(`   ${error.message}`);
+    if (error.stack) {
+      console.error(error.stack);
+    }
+    process.exit(1);
+  }
+}
+
+createTestBillTable3();

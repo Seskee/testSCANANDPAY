@@ -494,3 +494,5 @@ cd ../server && npm install
 [⬆ Back to Top](#quickpay---scan--pay-restaurant-payment-system)
 
 </div>
+#   t e s t S C A N A N D P A Y  
+ 

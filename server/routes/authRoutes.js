@@ -93,8 +93,12 @@ router.post('/refresh', async (req, res) => {
     });
   } catch (error) {
     console.error('Refresh token error:', error.message);
-    // Ako refresh token ne valja, brišemo cookie
-    res.clearCookie('refreshToken');
+    // Ako refresh token ne valja, brišemo cookie sa istim sigurnosnim parametrima
+    res.clearCookie('refreshToken', {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'strict'
+    });
     res.status(403).json({ error: 'Invalid or expired refresh token' });
   }
 });
@@ -108,8 +112,12 @@ router.post('/logout', authenticateToken, async (req, res) => {
     // Obriši refresh token iz baze
     await db.updateRefreshToken(userId, null);
     
-    // Obriši cookie iz preglednika
-    res.clearCookie('refreshToken');
+    // Obriši cookie iz preglednika sa ISTIM sigurnosnim parametrima
+    res.clearCookie('refreshToken', {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'strict'
+    });
     
     res.json({ success: true, message: 'Logout successful' });
   } catch (error) {

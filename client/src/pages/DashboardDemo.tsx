@@ -2,28 +2,30 @@ import { useState, useEffect } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { DollarSign, Heart, TrendingUp, CheckCircle, Clock, Users, RefreshCw, Eye, Calendar, BarChart3 } from "lucide-react"
+import { DollarSign, Heart, TrendingUp, CheckCircle, Users, RefreshCw, Eye, BarChart3 } from "lucide-react"
 import { useNavigate } from "react-router-dom"
-import { motion } from "framer-motion"
+import { motion, Variants } from "framer-motion"
+
+// Mikro-komponenta koja sprječava re-renderiranje cijelog dashboarda
+const LiveClock = () => {
+  const[time, setTime] = useState(new Date());
+  useEffect(() => {
+    const timer = setInterval(() => setTime(new Date()), 1000);
+    return () => clearInterval(timer);
+  },[]);
+  return <span>{time.toLocaleTimeString()}</span>;
+};
 
 export function DashboardDemo() {
   const navigate = useNavigate()
-  const [currentTime, setCurrentTime] = useState(new Date())
 
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setCurrentTime(new Date())
-    }, 1000)
-
-    return () => clearInterval(timer)
-  }, [])
-
-  const fadeInUp = {
+  // Dodan tip Variants kako se TypeScript ne bi bunio oko 'ease' stringa
+  const fadeInUp: Variants = {
     hidden: { opacity: 0, y: 60 },
     visible: { opacity: 1, y: 0, transition: { duration: 0.6, ease: "easeOut" } }
   }
 
-  const staggerContainer = {
+  const staggerContainer: Variants = {
     hidden: { opacity: 0 },
     visible: {
       opacity: 1,
@@ -33,7 +35,7 @@ export function DashboardDemo() {
     }
   }
 
-  const kpiData = [
+  const kpiData =[
     {
       title: "Today's Revenue",
       value: "$2,847.50",
@@ -68,7 +70,7 @@ export function DashboardDemo() {
     }
   ]
 
-  const recentTransactions = [
+  const recentTransactions =[
     { id: 1, table: "Table 12", amount: "$67.50", tip: "$10.13", time: "2 min ago", status: "completed" },
     { id: 2, table: "Table 8", amount: "$34.20", tip: "$5.13", time: "5 min ago", status: "completed" },
     { id: 3, table: "Table 15", amount: "$89.75", tip: "$13.46", time: "8 min ago", status: "completed" },
@@ -76,7 +78,7 @@ export function DashboardDemo() {
     { id: 5, table: "Table 7", amount: "$56.80", tip: "$8.52", time: "15 min ago", status: "completed" }
   ]
 
-  const activeTables = [
+  const activeTables =[
     { table: "Table 1", guests: 4, bill: "$78.50", status: "dining" },
     { table: "Table 5", guests: 2, bill: "$45.20", status: "ready" },
     { table: "Table 9", guests: 6, bill: "$156.30", status: "dining" },
@@ -100,7 +102,7 @@ export function DashboardDemo() {
                 Dashboard Demo
               </h1>
               <p className="text-gray-600">
-                Live view of your restaurant's performance • {currentTime.toLocaleTimeString()}
+                Live view of your restaurant's performance • <LiveClock />
               </p>
             </div>
             <div className="flex gap-3">

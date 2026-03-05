@@ -59,7 +59,7 @@ localApi.interceptors.response.use(
       } catch (refreshError) {
         // Ako refresh token ne valja (istekao nakon 7 dana ili obrisan), izbaci korisnika
         localStorage.removeItem('restaurant_token');
-        window.location.href = '/login'; // Preusmjeri na login
+        window.location.href = '/restaurant/login'; // Preusmjeri na login
         return Promise.reject(refreshError);
       }
     }

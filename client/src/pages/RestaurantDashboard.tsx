@@ -77,22 +77,31 @@ interface MonthlyRevenue {
   }>
 }
 
+// Mikro-komponenta koja sprječava re-renderiranje cijelog dashboarda
+const LiveClock = () => {
+  const [time, setTime] = useState(new Date());
+  useEffect(() => {
+    const timer = setInterval(() => setTime(new Date()), 1000);
+    return () => clearInterval(timer);
+  },[]);
+  return <span>{time.toLocaleTimeString()}</span>;
+};
+
 export function RestaurantDashboard() {
   const navigate = useNavigate()
   const { toast } = useToast()
   const [summary, setSummary] = useState<DashboardSummary | null>(null)
   const [monthlyData, setMonthlyData] = useState<MonthlyRevenue | null>(null)
   const [transactions, setTransactions] = useState<Transaction[]>([])
-  const [loading, setLoading] = useState(true)
+  const[loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
-  const [currentTime, setCurrentTime] = useState(new Date())
   const [activeTab, setActiveTab] = useState("overview")
 
   // Filter states
-  const [filterStartDate, setFilterStartDate] = useState("")
+  const[filterStartDate, setFilterStartDate] = useState("")
   const [filterEndDate, setFilterEndDate] = useState("")
   const [filterStatus, setFilterStatus] = useState("all")
-  const [filterPaymentMethod, setFilterPaymentMethod] = useState("all")
+  const[filterPaymentMethod, setFilterPaymentMethod] = useState("all")
   const [filterTableNumber, setFilterTableNumber] = useState("")
 
   // Monthly analysis states
@@ -107,14 +116,6 @@ export function RestaurantDashboard() {
       return
     }
   }, [navigate])
-
-  // Update current time
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setCurrentTime(new Date())
-    }, 1000)
-    return () => clearInterval(timer)
-  }, [])
 
   // Fetch dashboard data
   const fetchDashboardData = async (isRefresh = false) => {
@@ -150,7 +151,7 @@ export function RestaurantDashboard() {
 
   useEffect(() => {
     fetchDashboardData()
-  }, [])
+  },[])
 
   // Fetch monthly data when month/year changes
   const fetchMonthlyData = async () => {
@@ -276,7 +277,7 @@ export function RestaurantDashboard() {
               {getRestaurantName()} Dashboard
             </h1>
             <p className="text-gray-600">
-              Live view • {currentTime.toLocaleTimeString()}
+              Live view • <LiveClock />
             </p>
           </div>
           <div className="flex gap-3">

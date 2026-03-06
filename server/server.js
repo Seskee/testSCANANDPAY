@@ -2,10 +2,16 @@
 require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
+const helmet = require("helmet");
+const xss = require("xss-clean");
+const hpp = require("hpp");
+const compression = require("compression");
 
-// Import middleware-a
-const { apiLimiter, authLimiter } = require('./routes/middleware/rateLimiter');
+// Import utilita
+const logger = require('./utils/logger');
 const { connectDB } = require("./config/database");
+const { connectRedis } = require("./config/redis");
+const { apiLimiter, authLimiter } = require('./routes/middleware/rateLimiter');
 
 // Import ruta
 const stripeWebhookRoutes = require("./routes/stripeWebhookRoutes");
@@ -19,42 +25,43 @@ const qrCodeRoutes = require("./routes/qrCodeRoutes");
 const receiptRoutes = require("./routes/receiptRoutes");
 const dashboardRoutes = require("./routes/dashboardRoutes");
 
-// Provjera environment varijabli
-if (!process.env.DATABASE_URL) {
-  console.error("Error: DATABASE_URL variable in .env missing.");
-  process.exit(-1);
-}
-if (!process.env.JWT_SECRET) {
-  console.error("Error: JWT_SECRET variable in .env missing.");
+if (!process.env.DATABASE_URL || !process.env.JWT_SECRET) {
+  logger.fatal("CRITICAL: Missing DATABASE_URL or JWT_SECRET in .env");
   process.exit(-1);
 }
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// --- MIDDLEWARE KONFIGURACIJA ---
-
-// 1. STRIPE WEBHOOK (Mora biti prvi i koristiti express.raw)
+// 1. STRIPE WEBHOOK
 app.use("/webhooks", express.raw({ type: 'application/json' }), stripeWebhookRoutes);
 
-// 2. CORS
+// 2. GLOBALNI MIDDLEWARE
+app.use(helmet());
 app.use(cors({
   origin: process.env.CLIENT_URL || 'http://localhost:5173',
   credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'idempotency-key']
 }));
 
-// 3. RATE LIMITING (Sigurnost)
-app.use('/api', apiLimiter); // Općeniti limiter za sav API
-app.use('/api/auth/login', authLimiter);    // DODANO: Specifična zaštita od Brute Force-a
-app.use('/api/auth/register', authLimiter); // DODANO: Zaštita od botova na registraciji
+app.use('/api', apiLimiter);
+app.use('/api/auth/login', authLimiter);
+app.use('/api/auth/register', authLimiter);
 
-// 4. PARSERI (Nakon webhooka!)
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '10kb' }));
+app.use(express.urlencoded({ extended: true, limit: '10kb' }));
+app.use(xss());
+app.use(hpp());
+app.use(compression());
 
-// --- RUTE ---
+// HTTP Request Logger Middleware
+app.use((req, res, next) => {
+  logger.info(`${req.method} ${req.url}`);
+  next();
+});
 
-// Montiranje ruta s prefiksima radi preglednosti
+// 3. RUTE
 app.use('/api/auth', authRoutes);
 app.use('/api/restaurants', restaurantRoutes);
 app.use('/api/bills', billRoutes);
@@ -65,28 +72,39 @@ app.use('/api/receipts', receiptRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/', basicRoutes);
 
-// --- ERROR HANDLING ---
-
-app.use((req, res) => res.status(404).json({ error: "Page not found." }));
+// 4. ERROR HANDLING
+app.use((req, res) => res.status(404).json({ error: "Endpoint not found." }));
 
 app.use((err, req, res, next) => {
-  console.error(`Unhandled error: ${err.message}`);
-  res.status(500).json({ 
+  logger.error(`[ERROR] ${err.name}: ${err.message}`);
+  if (err.type === 'entity.too.large') {
+    return res.status(413).json({ error: "Payload too large. Maximum size is 10kb." });
+  }
+  res.status(err.statusCode || 500).json({ 
     error: "Internal Server Error", 
     message: process.env.NODE_ENV === 'development' ? err.message : "Something went wrong." 
   });
 });
 
-// --- POKRETANJE ---
+// 5. POKRETANJE SERVERA
+const startServer = async () => {
+  try {
+    await connectDB();
+    await connectRedis(); // Spajanje na Redis
 
-connectDB()
-  .then(() => {
-    app.listen(PORT, '0.0.0.0', () => {
-      console.log(`🚀 Server running at http://localhost:${PORT}`);
-      console.log(`🔒 Rate Limiters active on Auth routes`);
+    const server = app.listen(PORT, '0.0.0.0', () => {
+      logger.info(`🚀 Server running at http://localhost:${PORT}`);
+      logger.info(`🔒 Enterprise Security Active (Helmet, XSS, HPP, Redis Cache)`);
     });
-  })
-  .catch(err => {
-    console.error("❌ Failed to connect to the database", err);
+
+    process.on('unhandledRejection', (err) => {
+      logger.fatal(`UNHANDLED REJECTION! 💥 Shutting down... ${err.name}: ${err.message}`);
+      server.close(() => process.exit(1));
+    });
+  } catch (err) {
+    logger.fatal(`❌ Failed to start server: ${err.message}`);
     process.exit(1);
-  });
+  }
+};
+
+startServer();

@@ -47,20 +47,30 @@ const updateRestaurantStripeInfo = async (restaurantId, accountDetails) => {
   });
 };
 
-const createPaymentIntent = async (amount, currency, restaurantId, stripeAccountId, metadata = {}) => {
-  const intent = await stripe.paymentIntents.create(
-    {
-      amount: Math.round(amount * 100),
-      currency: currency || 'eur',
-      transfer_data: stripeAccountId ? { destination: stripeAccountId } : undefined,
-      metadata: { restaurantId: restaurantId.toString(), ...metadata },
-      automatic_payment_methods: { enabled: true, allow_redirects: 'never' },
-    },
-    {
-      idempotencyKey: metadata?.billId && metadata?.idempotencyKey
-        ? `${metadata.billId}:${metadata.idempotencyKey}` : undefined,
-    }
-  );
+const createPaymentIntent = async (amount, currency, paymentMethod, stripeAccountId, metadata = {}) => {
+  // FIX: Stripe očekuje payment_method_types kao array
+  const paymentMethodTypes = paymentMethod === 'card' ? ['card'] : [paymentMethod, 'card'];
+
+  const intentParams = {
+    amount: Math.round(amount), // Već je pomnoženo sa 100 u paymentService
+    currency: currency || 'eur',
+    payment_method_types: paymentMethodTypes,
+    metadata: { ...metadata },
+  };
+
+  // FIX: Ako koristimo Stripe Connect, moramo dodati application_fee_amount
+  // Ovdje uzimamo 1% provizije za aplikaciju (Scan&Pay)
+  if (stripeAccountId && !stripeAccountId.startsWith('acct_test_')) {
+    intentParams.application_fee_amount = Math.round(amount * 0.01); // 1% fee
+    intentParams.transfer_data = {
+      destination: stripeAccountId,
+    };
+  }
+
+  const intent = await stripe.paymentIntents.create(intentParams, {
+    idempotencyKey: metadata?.idempotencyKey ? `${metadata.idempotencyKey}` : undefined,
+  });
+  
   console.log(`Payment intent kreiran: ${intent.id}`);
   return intent;
 };
@@ -81,10 +91,16 @@ const createRefund = async (paymentIntentId, amount) => {
 };
 
 const getAccountBalance = async (stripeAccountId) => {
+  if (stripeAccountId.startsWith('acct_test_')) {
+    return { available: [{ amount: 100000, currency: 'eur' }], pending: [{ amount: 50000, currency: 'eur' }] };
+  }
   return stripe.balance.retrieve({ stripeAccount: stripeAccountId });
 };
 
 const createLoginLink = async (stripeAccountId) => {
+  if (stripeAccountId.startsWith('acct_test_')) {
+    return { url: 'https://dashboard.stripe.com/test/dashboard' };
+  }
   return stripe.accounts.createLoginLink(stripeAccountId);
 };
 

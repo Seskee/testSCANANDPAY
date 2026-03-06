@@ -59,9 +59,11 @@ class PostgresDatabase {
   constructor(connectionString) {
     this.pool = new Pool({
       connectionString,
-      max: 20,
+      max: 50,
+      min:5,
       idleTimeoutMillis: 30000,
       connectionTimeoutMillis: 5000,
+      maxUses: 7500,
     });
 
     this.pool.on('error', (err) => {

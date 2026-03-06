@@ -2,6 +2,16 @@ const bcrypt = require('bcrypt');
 const { getDB } = require('../config/database');
 const { generateToken, generateRefreshToken, verifyRefreshToken } = require('../utils/jwt');
 
+// DTO: Filtrira osjetljive podatke prije slanja klijentu
+const sanitizeUser = (user, restaurant) => ({
+  _id: user.id,
+  id: user.id,
+  email: user.email,
+  name: restaurant?.name || user.first_name,
+  tableCount: restaurant?.table_count || 10,
+  restaurantId: restaurant?.id
+});
+
 const registerUser = async (userData) => {
   const { email, password, restaurantName, tableCount = 10 } = userData;
   const db = getDB();
@@ -25,24 +35,21 @@ const registerUser = async (userData) => {
     country: 'HR',
     default_currency: 'EUR',
     timezone: 'Europe/Zagreb',
+    table_count: tableCount // FIX: Dodano spremanje broja stolova
   });
 
   const tableNumbers = Array.from({ length: tableCount }, (_, i) => String(i + 1));
   await db.createTablesBatch(restaurant.id, tableNumbers);
 
-  console.log(`Novi korisnik: ${email}, restoran: ${restaurantName}`);
-  
-  const payload = { id: user.id, _id: user.id, email: user.email, restaurantName };
-  const token = generateToken(payload);
+  const token = generateToken({ id: user.id, email: user.email });
   const refreshToken = generateRefreshToken({ id: user.id });
 
-  // Spremi refresh token u bazu
   await db.updateRefreshToken(user.id, refreshToken);
 
   return {
     token,
     refreshToken,
-    user: { _id: user.id, id: user.id, email: user.email, name: restaurantName, tableCount, restaurantId: restaurant.id },
+    user: sanitizeUser(user, restaurant),
   };
 };
 
@@ -67,45 +74,30 @@ const loginUser = async (credentials) => {
   }
 
   await db.updateLastLogin(user.id);
-  console.log(`Korisnik prijavljen: ${email}`);
   
-  const payload = { id: user.id, _id: user.id, email: user.email, restaurantName: restaurant.name };
-  const token = generateToken(payload);
+  const token = generateToken({ id: user.id, email: user.email });
   const refreshToken = generateRefreshToken({ id: user.id });
 
-  // Spremi refresh token u bazu
   await db.updateRefreshToken(user.id, refreshToken);
 
   return {
     token,
     refreshToken,
-    user: { _id: user.id, id: user.id, email: user.email, name: restaurant.name, tableCount: 10, restaurantId: restaurant.id },
+    user: sanitizeUser(user, restaurant),
   };
 };
 
 const refreshUserToken = async (refreshToken) => {
   const db = getDB();
   
-  // 1. Provjeri je li token validan (potpis i rok trajanja)
   const decoded = verifyRefreshToken(refreshToken);
   
-  // 2. Provjeri postoji li korisnik i podudara li se token u bazi
   const user = await db.getUserById(decoded.id);
   if (!user || user.refresh_token !== refreshToken) {
     throw new Error('Invalid refresh token');
   }
 
-  const restaurants = await db.getRestaurantsByOwnerId(user.id);
-  const restaurant = restaurants[0];
-
-  // 3. Izdaj novi kratkotrajni Access Token
-  const token = generateToken({ 
-    id: user.id, 
-    _id: user.id, 
-    email: user.email, 
-    restaurantName: restaurant?.name 
-  });
-
+  const token = generateToken({ id: user.id, email: user.email });
   return { token };
 };
 

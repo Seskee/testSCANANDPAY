@@ -1,3 +1,4 @@
+// server/routes/authRoutes.js
 const express = require('express');
 const { registerUser, loginUser, refreshUserToken } = require('../services/authService');
 const { authenticateToken } = require('./middleware/auth');
@@ -5,20 +6,23 @@ const { getDB } = require('../config/database');
 
 const router = express.Router();
 
-// Helper funkcija za postavljanje sigurnog cookie-ja
 const setRefreshCookie = (res, token) => {
   res.cookie('refreshToken', token, {
-    httpOnly: true, // Javascript na frontendu ga ne može čitati (zaštita od XSS)
-    secure: process.env.NODE_ENV === 'production', // U produkciji zahtijeva HTTPS
-    sameSite: 'strict', // Zaštita od CSRF napada
-    maxAge: 7 * 24 * 60 * 60 * 1000 // 7 dana
+    httpOnly: true, 
+    secure: process.env.NODE_ENV === 'production', 
+    sameSite: 'strict', 
+    maxAge: 7 * 24 * 60 * 60 * 1000 
   });
 };
 
-// Register endpoint
 router.post('/register', async (req, res) => {
   try {
     const { email, password, restaurantName, tableCount } = req.body;
+
+    // BANK-GRADE: Prevencija Type-Casting Crash-a (ako korisnik pošalje objekt umjesto stringa)
+    if (typeof email !== 'string' || typeof password !== 'string' || typeof restaurantName !== 'string') {
+      return res.status(400).json({ error: 'Invalid input format' });
+    }
 
     if (!email || !password || !restaurantName) {
       return res.status(400).json({ error: 'Email, password, and restaurant name are required' });
@@ -34,7 +38,7 @@ router.post('/register', async (req, res) => {
     res.status(201).json({
       success: true,
       message: 'Registration successful',
-      token: result.token, // Šaljemo samo kratki token, dugi je u cookie-ju
+      token: result.token, 
       restaurant: { ...result.user, _id: result.user.restaurantId },
       user: result.user
     });
@@ -43,10 +47,14 @@ router.post('/register', async (req, res) => {
   }
 });
 
-// Login endpoint
 router.post('/login', async (req, res) => {
   try {
     const { email, password } = req.body;
+
+    // BANK-GRADE: Prevencija Type-Casting Crash-a
+    if (typeof email !== 'string' || typeof password !== 'string') {
+      return res.status(400).json({ error: 'Invalid input format' });
+    }
 
     if (!email || !password) {
       return res.status(400).json({ error: 'Email and password are required' });
@@ -68,18 +76,12 @@ router.post('/login', async (req, res) => {
   }
 });
 
-// Refresh Token endpoint (NOVO)
 router.post('/refresh', async (req, res) => {
   try {
-    // Ručno parsiranje cookie-ja (da ne moramo instalirati cookie-parser paket)
-    const cookieHeader = req.headers.cookie;
-    let refreshToken = null;
+    const cookieHeader = req.headers.cookie || '';
     
-    if (cookieHeader) {
-      const cookies = cookieHeader.split(';').map(c => c.trim().split('='));
-      const refreshCookie = cookies.find(c => c[0] === 'refreshToken');
-      if (refreshCookie) refreshToken = refreshCookie[1];
-    }
+    const match = cookieHeader.match(/(?:^|; )refreshToken=([^;]*)/);
+    const refreshToken = match ? match[1] : null;
 
     if (!refreshToken) {
       return res.status(401).json({ error: 'Refresh token not found' });
@@ -93,7 +95,6 @@ router.post('/refresh', async (req, res) => {
     });
   } catch (error) {
     console.error('Refresh token error:', error.message);
-    // Ako refresh token ne valja, brišemo cookie sa istim sigurnosnim parametrima
     res.clearCookie('refreshToken', {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
@@ -103,16 +104,13 @@ router.post('/refresh', async (req, res) => {
   }
 });
 
-// Logout endpoint
 router.post('/logout', authenticateToken, async (req, res) => {
   try {
     const db = getDB();
     const userId = req.user.id || req.user._id;
     
-    // Obriši refresh token iz baze
     await db.updateRefreshToken(userId, null);
     
-    // Obriši cookie iz preglednika sa ISTIM sigurnosnim parametrima
     res.clearCookie('refreshToken', {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
@@ -125,7 +123,6 @@ router.post('/logout', authenticateToken, async (req, res) => {
   }
 });
 
-// Get current user endpoint
 router.get('/me', authenticateToken, async (req, res) => {
   try {
     const db = getDB();

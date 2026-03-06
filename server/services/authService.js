@@ -4,7 +4,6 @@ const crypto = require('crypto');
 const { getDB } = require('../config/database');
 const { generateToken, generateRefreshToken, verifyRefreshToken } = require('../utils/jwt');
 
-// DTO: Filtrira osjetljive podatke prije slanja klijentu
 const sanitizeUser = (user, restaurant) => ({
   _id: user.id,
   id: user.id,
@@ -14,8 +13,16 @@ const sanitizeUser = (user, restaurant) => ({
   restaurantId: restaurant?.id
 });
 
-// SIGURNOSNI DODATAK: HASH FUNKCIJA ZA REFRESH TOKENE
 const hashToken = (token) => crypto.createHash('sha256').update(token).digest('hex');
+
+// BANK-GRADE: Otpornost na Timing Attacks kod usporedbe tokena
+const timingSafeCompare = (a, b) => {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  if (bufA.length !== bufB.length) return false;
+  return crypto.timingSafeEqual(bufA, bufB);
+};
 
 const registerUser = async (userData) => {
   const { email, password, restaurantName, tableCount = 10 } = userData;
@@ -49,7 +56,6 @@ const registerUser = async (userData) => {
   const token = generateToken({ id: user.id, email: user.email });
   const refreshToken = generateRefreshToken({ id: user.id });
 
-  // SPREMAMO HASH U BAZU, NE OBIČAN TOKEN!
   await db.updateRefreshToken(user.id, hashToken(refreshToken));
 
   return {
@@ -84,7 +90,6 @@ const loginUser = async (credentials) => {
   const token = generateToken({ id: user.id, email: user.email });
   const refreshToken = generateRefreshToken({ id: user.id });
 
-  // SPREMAMO HASH U BAZU
   await db.updateRefreshToken(user.id, hashToken(refreshToken));
 
   return {
@@ -100,8 +105,8 @@ const refreshUserToken = async (refreshToken) => {
   const decoded = verifyRefreshToken(refreshToken);
   const user = await db.getUserById(decoded.id);
   
-  // USPOREĐUJEMO HASH IZ REQUESTA S HASHOM IZ BAZE
-  if (!user || user.refresh_token !== hashToken(refreshToken)) {
+  // Ovdje koristimo timing-safe usporedbu
+  if (!user || !timingSafeCompare(user.refresh_token, hashToken(refreshToken))) {
     throw new Error('Invalid refresh token');
   }
 

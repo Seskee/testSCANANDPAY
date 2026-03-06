@@ -1,114 +1,91 @@
+// server/routes/billRoutes.js
 const express = require('express');
 const router = express.Router();
 const billService = require('../services/billService');
 const { authenticateToken } = require('./middleware/auth');
+const { getDB } = require('../config/database'); // Potrebno za IDOR provjeru
 
-// Description: Create a new bill
-// Endpoint: POST /api/bills
-// Request: { restaurant: ObjectId, tableNumber: number, items: Array<{ name: string, quantity: number, price: number }>, tax?: number, notes?: string }
-// Response: { bill: Bill }
+// HELPER: Sigurnosna provjera vlasništva restorana nad računom
+const verifyBillOwnership = async (billId, userId) => {
+  const db = getDB();
+  const bill = await db.getBillById(billId);
+  if (!bill) throw new Error('Bill not found');
+  const restaurant = await db.getRestaurantById(bill.restaurant_id);
+  if (!restaurant || restaurant.owner_id.toString() !== userId.toString()) {
+    throw new Error('Unauthorized access to this bill');
+  }
+  return true;
+};
+
 router.post('/', authenticateToken, async (req, res) => {
   try {
     const billData = req.body;
-
-    // Validate required fields
-    if (!billData.restaurant) {
-      return res.status(400).json({ error: 'Restaurant ID is required' });
+    if (!billData.restaurant || !billData.tableNumber || !billData.items || billData.items.length === 0) {
+      return res.status(400).json({ error: 'Missing required fields' });
     }
-
-    if (!billData.tableNumber) {
-      return res.status(400).json({ error: 'Table number is required' });
-    }
-
-    if (!billData.items || !Array.isArray(billData.items) || billData.items.length === 0) {
-      return res.status(400).json({ error: 'At least one item is required' });
-    }
-
-    // Validate items structure
-    for (const item of billData.items) {
-      if (!item.name || !item.quantity || !item.price) {
-        return res.status(400).json({
-          error: 'Each item must have name, quantity, and price'
-        });
-      }
+    
+    // Zabrani da netko kreira račun za tuđi restoran
+    const db = getDB();
+    const restaurant = await db.getRestaurantById(billData.restaurant);
+    if (!restaurant || restaurant.owner_id.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ error: 'Unauthorized access to this restaurant' });
     }
 
     const bill = await billService.createBill(billData);
-
-    console.log('Bill created via API:', bill._id);
     res.status(201).json({ bill });
   } catch (error) {
-    console.error('Error in POST /api/bills:', error.message);
     res.status(400).json({ error: error.message });
   }
 });
 
-// Description: Get bill by restaurant and table number
-// Endpoint: GET /api/bills/restaurant/:restaurantId/table/:tableNumber
-// Request: {}
-// Response: { bill: Bill | null } | { fullyPaid: boolean, message: string }
+// PUBLIC RUTA - Gosti skeniraju
 router.get('/restaurant/:restaurantId/table/:tableNumber', async (req, res) => {
   try {
     const { restaurantId, tableNumber } = req.params;
-
-    if (!restaurantId || !tableNumber) {
-      return res.status(400).json({ error: 'Restaurant ID and table number are required' });
-    }
-
     const result = await billService.getBillByRestaurantAndTable(restaurantId, tableNumber);
-
-    if (!result) {
-      return res.status(404).json({ error: 'No active bill found for this table' });
-    }
-
-    // Check if the bill is fully paid
-    if (result.fullyPaid) {
-      console.log('Bill is fully paid for table:', tableNumber);
-      return res.status(410).json({
-        fullyPaid: true,
-        message: result.message
-      });
-    }
-
-    console.log('Bill retrieved via API for table:', tableNumber);
+    
+    if (!result) return res.status(404).json({ error: 'No active bill found' });
+    if (result.fullyPaid) return res.status(410).json(result);
     res.status(200).json({ bill: result });
   } catch (error) {
-    console.error('Error in GET /api/bills/restaurant/:restaurantId/table/:tableNumber:', error.message);
     res.status(400).json({ error: error.message });
   }
 });
 
-// Description: Get a single bill by ID
-// Endpoint: GET /api/bills/:id
-// Request: {}
-// Response: { bill: Bill }
-router.get('/:id', async (req, res) => {
+// PRIVATE RUTA - IDOR ZAŠTITA DODANA
+router.get('/:id', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
-
+    await verifyBillOwnership(id, req.user._id); // Sigurnosna blokada
     const bill = await billService.getBillById(id);
-
-    console.log('Bill retrieved via API:', id);
     res.status(200).json({ bill });
   } catch (error) {
-    console.error('Error in GET /api/bills/:id:', error.message);
-
-    if (error.message === 'Bill not found') {
-      return res.status(404).json({ error: error.message });
-    }
-
-    res.status(400).json({ error: error.message });
+    res.status(error.message.includes('Unauthorized') ? 403 : 404).json({ error: error.message });
   }
 });
 
-// Description: Get all bills with optional filters
-// Endpoint: GET /api/bills
-// Request: { restaurant?: ObjectId, status?: string, tableNumber?: number, startDate?: string, endDate?: string, limit?: number }
-// Response: { bills: Array<Bill> }
+// PRIVATE RUTA - IDOR ZAŠTITA DODANA
 router.get('/', authenticateToken, async (req, res) => {
   try {
+    const db = getDB();
+    // Prisili da backend filtrira račune SAMO po restoranima koje korisnik posjeduje
+    const myRestaurants = await db.getRestaurantsByOwnerId(req.user._id);
+    const myRestaurantIds = myRestaurants.map(r => r.id);
+
+    const requestedRestaurant = req.query.restaurant;
+    
+    // Ako je zatražio specifičan restoran, provjeri je li njegov
+    if (requestedRestaurant && !myRestaurantIds.includes(requestedRestaurant)) {
+        return res.status(403).json({ error: 'Unauthorized access to this restaurant' });
+    }
+
+    // Ako nije poslao restoran, vrati prazno (ne dopusti dump cijele baze)
+    if (!requestedRestaurant && myRestaurantIds.length === 0) {
+        return res.status(200).json({ bills:[] });
+    }
+
     const filters = {
-      restaurant: req.query.restaurant,
+      restaurant: requestedRestaurant || myRestaurantIds[0], // Osiguraj da uvijek ima jedan ID
       status: req.query.status,
       tableNumber: req.query.tableNumber,
       startDate: req.query.startDate,
@@ -117,69 +94,29 @@ router.get('/', authenticateToken, async (req, res) => {
     };
 
     const bills = await billService.getAllBills(filters);
-
-    console.log('Bills retrieved via API, count:', bills.length);
     res.status(200).json({ bills });
   } catch (error) {
-    console.error('Error in GET /api/bills:', error.message);
     res.status(400).json({ error: error.message });
   }
 });
 
-// Description: Update a bill
-// Endpoint: PUT /api/bills/:id
-// Request: { items?: Array<Item>, tableNumber?: number, tax?: number, notes?: string, status?: string, payment?: Payment }
-// Response: { bill: Bill }
 router.put('/:id', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
-    const updateData = req.body;
-    const userId = req.user._id;
-
-    const bill = await billService.updateBill(id, updateData, userId);
-
-    console.log('Bill updated via API:', id);
+    // Ownership provjera je već ukomponirana unutar billService.updateBill u starom kodu
+    const bill = await billService.updateBill(id, req.body, req.user._id);
     res.status(200).json({ bill });
   } catch (error) {
-    console.error('Error in PUT /api/bills/:id:', error.message);
-
-    if (error.message === 'Bill not found') {
-      return res.status(404).json({ error: error.message });
-    }
-
-    if (error.message.includes('Unauthorized')) {
-      return res.status(403).json({ error: error.message });
-    }
-
-    res.status(400).json({ error: error.message });
+    res.status(error.message.includes('Unauthorized') ? 403 : 400).json({ error: error.message });
   }
 });
 
-// Description: Delete a bill
-// Endpoint: DELETE /api/bills/:id
-// Request: {}
-// Response: { message: string } | { bill: Bill }
 router.delete('/:id', authenticateToken, async (req, res) => {
   try {
-    const { id } = req.params;
-    const userId = req.user._id;
-
-    const result = await billService.deleteBill(id, userId);
-
-    console.log('Bill deleted via API:', id);
+    const result = await billService.deleteBill(req.params.id, req.user._id);
     res.status(200).json(result);
   } catch (error) {
-    console.error('Error in DELETE /api/bills/:id:', error.message);
-
-    if (error.message === 'Bill not found') {
-      return res.status(404).json({ error: error.message });
-    }
-
-    if (error.message.includes('Unauthorized')) {
-      return res.status(403).json({ error: error.message });
-    }
-
-    res.status(400).json({ error: error.message });
+    res.status(error.message.includes('Unauthorized') ? 403 : 400).json({ error: error.message });
   }
 });
 

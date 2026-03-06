@@ -4,15 +4,19 @@ const stripeService = require('./stripeService');
 
 const createPayment = async (billId, data) => {
   const { items, tip = 0, customerEmail, idempotencyKey, paymentMethod = 'card' } = data;
-  
   if (!idempotencyKey) throw new Error('Missing idempotency key');
-  const db = getDB();
-
-  // 1. Provjera postoji li već payment s ovim idempotencyKey-em u bazi (sprječava duplo klikanje)
-  // Napomena: Za ovo bi bilo idealno dodati idempotency_key kolonu u payments tablicu, 
-  // ali za sada ćemo koristiti metadata
   
-  const validation = await db.validateSplitPayment(billId, items.map(i => ({ bill_item_id: i.itemId, quantity: i.quantity || 1 })));
+  const db = getDB();
+  const itemMap = {};
+  for (const i of items) {
+    const qty = Number(i.quantity);
+    if (isNaN(qty) || qty <= 0) throw new Error("Invalid quantity");
+    if (!itemMap[i.itemId]) itemMap[i.itemId] = 0;
+    itemMap[i.itemId] += qty;
+  }
+  const aggregatedItems = Object.keys(itemMap).map(id => ({ itemId: id, quantity: itemMap[id] }));
+
+  const validation = await db.validateSplitPayment(billId, aggregatedItems.map(i => ({ bill_item_id: i.itemId, quantity: i.quantity })));
   if (!validation.valid) throw new Error(validation.errors.join(', '));
 
   const bill = await db.getBillById(billId);
@@ -21,17 +25,26 @@ const createPayment = async (billId, data) => {
 
   const restaurant = await db.getRestaurantById(bill.restaurant_id);
 
-  // Dodajemo idempotencyKey u metadata kako bismo ga sačuvali
   const splitResult = await db.createSplitPayment({
     bill_id: billId,
-    items: items.map(i => ({ bill_item_id: i.itemId, quantity: i.quantity || 1 })),
+    items: aggregatedItems.map(i => ({ bill_item_id: i.itemId, quantity: i.quantity })),
     tip_amount: parseFloat(tip) || 0,
     guest_email: customerEmail || null,
-    metadata: { idempotencyKey } // Spremamo ključ u bazu
+    metadata: { idempotencyKey }
   });
 
   const payment = splitResult.payment;
   const stripeAmount = Math.round(parseFloat(payment.total_amount) * 100);
+
+  // BANK-GRADE: Anti-Overflow i Stripe limiti (Min: 0.50 EUR, Max: 1M EUR)
+  if (stripeAmount < 50) {
+      await db.updatePayment(payment.id, { status: 'failed', failure_message: 'Total amount must be at least €0.50' });
+      throw new Error('Total amount must be at least €0.50 to process via card.');
+  }
+  if (stripeAmount > 100000000) {
+    await db.updatePayment(payment.id, { status: 'failed', failure_message: 'Amount exceeds maximum allowed limit' });
+    throw new Error('Transaction amount exceeds safety limit.');
+  }
 
   try {
     const intent = await stripeService.createPaymentIntent(
@@ -49,7 +62,6 @@ const createPayment = async (billId, data) => {
       clientSecret: intent.client_secret,
     };
   } catch (stripeError) {
-    // Ako Stripe baci grešku, moramo otkazati payment u bazi da ne ostane "visiti"
     await db.updatePayment(payment.id, { status: 'failed', failure_message: stripeError.message });
     throw stripeError;
   }
@@ -60,18 +72,22 @@ const confirmPayment = async (paymentId) => {
   const payment = await db.getPaymentById(paymentId);
   if (!payment) throw new Error('Payment not found');
 
-  // Ako je već uspjelo (npr. webhook je već odradio posao), samo vrati
-  if (payment.status === 'succeeded') {
-    return { ...payment, _id: payment.id };
-  }
+  if (payment.status === 'succeeded') return { ...payment, _id: payment.id };
 
   const intent = await stripeService.retrievePaymentIntent(payment.stripe_payment_intent_id);
   if (intent.status !== 'succeeded') throw new Error('Payment not completed on Stripe');
 
   const updated = await db.markPaymentAsSucceeded(paymentId, {
     stripe_charge_id: intent.latest_charge || '',
-    payment_method_type: intent.payment_method_types?.[0] || null, // FIX: intent.payment_method_type ne postoji u Stripeu, mora biti array
+    payment_method_type: intent.payment_method_types?.[0] || null,
   });
+
+  // BANK-GRADE CRASH PREVENTION: Ako je webhook odradio posao milisekundu ranije, updated će biti NULL.
+  // Preuzimamo pravo stanje iz baze umjesto da rušimo Node.js
+  if (!updated) {
+      const safePayment = await db.getPaymentById(paymentId);
+      return { ...safePayment, _id: safePayment.id, status: 'succeeded' };
+  }
 
   return { ...updated, _id: updated.id, status: 'succeeded' };
 };
@@ -95,12 +111,12 @@ const getPaymentByIntentId = async (intentId) => {
   return { ...payment, _id: payment.id };
 };
 
-const refundPayment = async (paymentId, amount) => {
+const refundPayment = async (paymentId) => {
   const db = getDB();
   const payment = await db.getPaymentById(paymentId);
   if (!payment) throw new Error('Payment not found');
 
-  const refund = await stripeService.createRefund(payment.stripe_payment_intent_id, amount);
+  const refund = await stripeService.createRefund(payment.stripe_payment_intent_id);
   const updated = await db.refundPayment(paymentId);
   return { refund, payment: { ...updated, _id: updated.id } };
 };

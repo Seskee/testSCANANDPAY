@@ -1,6 +1,6 @@
 // server/server.js
 require("dotenv").config();
-require("express-async-errors"); // SIGURNOSNI DODATAK: Hvata asinkrone greške da spriječi rušenje
+require("express-async-errors");
 const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
@@ -8,13 +8,11 @@ const xss = require("xss-clean");
 const hpp = require("hpp");
 const compression = require("compression");
 
-// Import utilita
 const logger = require('./utils/logger');
-const { connectDB, closeDB } = require("./config/database"); // DODAN closeDB
+const { connectDB, closeDB, getDB } = require("./config/database"); 
 const { connectRedis } = require("./config/redis");
 const { apiLimiter, authLimiter } = require('./routes/middleware/rateLimiter');
 
-// Import ruta
 const stripeWebhookRoutes = require("./routes/stripeWebhookRoutes");
 const basicRoutes = require("./routes/index");
 const authRoutes = require("./routes/authRoutes");
@@ -35,10 +33,8 @@ const app = express();
 app.set('trust proxy', 1);
 const PORT = process.env.PORT || 3000;
 
-// 1. STRIPE WEBHOOK
 app.use("/webhooks", express.raw({ type: 'application/json' }), stripeWebhookRoutes);
 
-// 2. GLOBALNI MIDDLEWARE
 app.use(helmet());
 app.use(cors({
   origin: process.env.CLIENT_URL || 'http://localhost:5173',
@@ -57,13 +53,11 @@ app.use(xss());
 app.use(hpp());
 app.use(compression());
 
-// HTTP Request Logger Middleware
 app.use((req, res, next) => {
   logger.info(`${req.method} ${req.url}`);
   next();
 });
 
-// 3. RUTE
 app.use('/api/auth', authRoutes);
 app.use('/api/restaurants', restaurantRoutes);
 app.use('/api/bills', billRoutes);
@@ -74,7 +68,6 @@ app.use('/api/receipts', receiptRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/', basicRoutes);
 
-// 4. ERROR HANDLING
 app.use((req, res) => res.status(404).json({ error: "Endpoint not found." }));
 
 app.use((err, req, res, next) => {
@@ -82,14 +75,23 @@ app.use((err, req, res, next) => {
   if (err.type === 'entity.too.large') {
     return res.status(413).json({ error: "Payload too large. Maximum size is 10kb." });
   }
+
+  let clientMessage = "Something went wrong.";
+  if (process.env.NODE_ENV === 'development') {
+      clientMessage = err.message;
+  } else if (err.message && !err.message.toLowerCase().includes('syntax') && !err.message.toLowerCase().includes('relation') && !err.message.toLowerCase().includes('database')) {
+      clientMessage = err.message;
+  }
+
   res.status(err.statusCode || 500).json({ 
     error: "Internal Server Error", 
-    message: process.env.NODE_ENV === 'development' ? err.message : "Something went wrong." 
+    message: clientMessage 
   });
 });
 
-// 5. POKRETANJE SERVERA (S DODANIM GRACEFUL SHUTDOWNOM)
 let server;
+let backgroundWorker;
+
 const startServer = async () => {
   try {
     await connectDB();
@@ -100,6 +102,20 @@ const startServer = async () => {
       logger.info(`🔒 Enterprise Security Active (Helmet, XSS, HPP, Redis Cache)`);
     });
 
+    // BANK-GRADE: Background Worker za čišćenje baze (sprječava zaključavanje stolova)
+    backgroundWorker = setInterval(async () => {
+      try {
+        const db = getDB();
+        const cleared = await db.cleanupStalePayments();
+        const closed = await db.autoClosePaidBills();
+        if (cleared > 0 || closed > 0) {
+          logger.info(`🧹 DB Cleanup: Cleared ${cleared} stale payments, Closed ${closed} fully paid bills.`);
+        }
+      } catch (err) {
+        logger.error(`DB Cleanup Task Error: ${err.message}`);
+      }
+    }, 5 * 60 * 1000); // Svakih 5 minuta
+
     process.on('unhandledRejection', (err) => {
       logger.fatal(`UNHANDLED REJECTION! 💥 ${err.name}: ${err.message}`);
     });
@@ -109,19 +125,18 @@ const startServer = async () => {
   }
 };
 
-// GRACEFUL SHUTDOWN - OBAVEZNO ZA FINANCIJE
 const gracefulShutdown = async (signal) => {
   logger.info(`Received ${signal}. Shutting down gracefully...`);
+  if (backgroundWorker) clearInterval(backgroundWorker); // Zaustavi workera
+  
   if (server) {
     server.close(async () => {
       logger.info('HTTP server closed.');
-      // Ovdje gasimo bazu sigurno kako transakcije ne bi ostale visiti
       await closeDB();
       logger.info('Database connections closed.');
       process.exit(0);
     });
 
-    // Force shutdown nakon 10 sekundi ako zahtjevi zapnu
     setTimeout(() => {
       logger.error('Could not close connections in time, forcefully shutting down');
       process.exit(1);

@@ -133,3 +133,15 @@ export const getRestaurantPayments = async (
     throw new Error(error?.response?.data?.error || error.message);
   }
 };
+
+// Description: Get public payment status for success verification
+// Endpoint: GET /api/payments/status/:paymentId
+export const getPaymentStatusPublic = async (paymentId: string) => {
+  try {
+    const response = await api.get(`/api/payments/status/${paymentId}`);
+    return response.data;
+  } catch (error: any) {
+    console.error('Error verifying payment status:', error);
+    throw new Error(error?.response?.data?.error || error.message);
+  }
+};

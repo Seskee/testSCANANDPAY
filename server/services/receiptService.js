@@ -4,13 +4,14 @@ const emailService = require('./emailService');
 
 const generateReceiptNumber = async (db, restaurantId) => {
   const year = new Date().getFullYear();
-  const result = await db.query(
+  // ISPRAVLJENO: queryOne sprječava globalni pad Postgresa zbog Unique Constrainta
+  const row = await db.queryOne(
     'SELECT get_next_sequence_value($1, $2, $3) AS next_val',[restaurantId, 'receipt', year]
   );
   
-  // SIGURNO DOHVAĆANJE: Sprečava crash ako baza ne vrati array (Optional Chaining)
-  const nextNumber = result?.rows?.[0]?.next_val || 1;
-  return `RCP-${year}-${String(nextNumber).padStart(6, '0')}`;
+  const nextNumber = row?.next_val || 1;
+  const rIdStr = restaurantId.toString().replace(/-/g, '').substring(0, 4).toUpperCase();
+  return `RCP-${rIdStr}-${year}-${String(nextNumber).padStart(5, '0')}`;
 };
 
 const generateReceipt = async (paymentId, customerEmail = null) => {

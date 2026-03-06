@@ -24,16 +24,28 @@ router.post("/stripe", async (req, res) => {
       const paymentIntent = event.data.object;
       console.log(`💰 Webhook: PaymentIntent ${paymentIntent.id} succeeded!`);
       
-      const payment = await db.getPaymentByStripeIntentId(paymentIntent.id);
+      let payment = await db.getPaymentByStripeIntentId(paymentIntent.id);
       
-      // DODANO: Sigurnosna provjera. Samo ako nije već obrađeno.
+      // BANK-GRADE SELF-HEALING: Ghost Webhook Recovery
+      // Ako je Node.js krepao između kreiranja Stripe Intenta i upisa u našu bazu, 
+      // webhook bi pao. Ovako pronalazimo izgubljenu transakciju preko Stripe Metadate!
+      if (!payment && paymentIntent.metadata && paymentIntent.metadata.internalPaymentId) {
+          console.warn(`⚠️ Webhook Recovery: PaymentIntent ${paymentIntent.id} not found by Intent ID. Falling back to internal Metadata ID...`);
+          payment = await db.getPaymentById(paymentIntent.metadata.internalPaymentId);
+          
+          if (payment) {
+              // Iscjeljujemo bazu - povezujemo odbjegli intent s našim računom
+              await db.updatePayment(payment.id, { stripe_payment_intent_id: paymentIntent.id });
+              console.log(`✅ Webhook Recovery: Database healed for Payment ${payment.id}`);
+          }
+      }
+
       if (payment && payment.status !== 'succeeded') {
         const updatedPayment = await db.markPaymentAsSucceeded(payment.id, {
           stripe_charge_id: paymentIntent.latest_charge || '',
           payment_method_type: paymentIntent.payment_method_types[0] || 'card',
         });
         
-        // Zbog FOR UPDATE u bazi, ako markPaymentAsSucceeded vrati null, znači da je neki drugi proces to već riješio.
         if (updatedPayment) {
            console.log(`✅ Webhook: Payment ${payment.id} marked as succeeded in DB.`);
         } else {
@@ -42,7 +54,13 @@ router.post("/stripe", async (req, res) => {
       }
     } else if (event.type === 'payment_intent.payment_failed') {
       const failedIntent = event.data.object;
-      const failedPayment = await db.getPaymentByStripeIntentId(failedIntent.id);
+      let failedPayment = await db.getPaymentByStripeIntentId(failedIntent.id);
+      
+      // Ghost webhook recovery za failed status
+      if (!failedPayment && failedIntent.metadata && failedIntent.metadata.internalPaymentId) {
+          failedPayment = await db.getPaymentById(failedIntent.metadata.internalPaymentId);
+      }
+
       if (failedPayment && failedPayment.status !== 'failed') {
         await db.markPaymentAsFailed(
           failedPayment.id, 

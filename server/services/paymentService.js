@@ -36,7 +36,6 @@ const createPayment = async (billId, data) => {
   const payment = splitResult.payment;
   const stripeAmount = Math.round(parseFloat(payment.total_amount) * 100);
 
-  // BANK-GRADE: Anti-Overflow i Stripe limiti (Min: 0.50 EUR, Max: 1M EUR)
   if (stripeAmount < 50) {
       await db.updatePayment(payment.id, { status: 'failed', failure_message: 'Total amount must be at least €0.50' });
       throw new Error('Total amount must be at least €0.50 to process via card.');
@@ -52,7 +51,12 @@ const createPayment = async (billId, data) => {
       restaurant.default_currency || 'eur',
       paymentMethod,
       restaurant.stripe_account_id || null,
-      { billId, idempotencyKey }
+      { 
+        billId, 
+        idempotencyKey,
+        // BANK-GRADE: Injiciramo naš interni ID kako bi Webhook sam pronašao put doma ako DB zapis pukne
+        internalPaymentId: payment.id 
+      }
     );
 
     await db.updatePayment(payment.id, { stripe_payment_intent_id: intent.id });
@@ -82,8 +86,6 @@ const confirmPayment = async (paymentId) => {
     payment_method_type: intent.payment_method_types?.[0] || null,
   });
 
-  // BANK-GRADE CRASH PREVENTION: Ako je webhook odradio posao milisekundu ranije, updated će biti NULL.
-  // Preuzimamo pravo stanje iz baze umjesto da rušimo Node.js
   if (!updated) {
       const safePayment = await db.getPaymentById(paymentId);
       return { ...safePayment, _id: safePayment.id, status: 'succeeded' };

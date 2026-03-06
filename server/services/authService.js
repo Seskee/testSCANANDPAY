@@ -1,4 +1,6 @@
+// server/services/authService.js
 const bcrypt = require('bcrypt');
+const crypto = require('crypto');
 const { getDB } = require('../config/database');
 const { generateToken, generateRefreshToken, verifyRefreshToken } = require('../utils/jwt');
 
@@ -11,6 +13,9 @@ const sanitizeUser = (user, restaurant) => ({
   tableCount: restaurant?.table_count || 10,
   restaurantId: restaurant?.id
 });
+
+// SIGURNOSNI DODATAK: HASH FUNKCIJA ZA REFRESH TOKENE
+const hashToken = (token) => crypto.createHash('sha256').update(token).digest('hex');
 
 const registerUser = async (userData) => {
   const { email, password, restaurantName, tableCount = 10 } = userData;
@@ -35,7 +40,7 @@ const registerUser = async (userData) => {
     country: 'HR',
     default_currency: 'EUR',
     timezone: 'Europe/Zagreb',
-    table_count: tableCount // FIX: Dodano spremanje broja stolova
+    table_count: tableCount
   });
 
   const tableNumbers = Array.from({ length: tableCount }, (_, i) => String(i + 1));
@@ -44,7 +49,8 @@ const registerUser = async (userData) => {
   const token = generateToken({ id: user.id, email: user.email });
   const refreshToken = generateRefreshToken({ id: user.id });
 
-  await db.updateRefreshToken(user.id, refreshToken);
+  // SPREMAMO HASH U BAZU, NE OBIČAN TOKEN!
+  await db.updateRefreshToken(user.id, hashToken(refreshToken));
 
   return {
     token,
@@ -78,7 +84,8 @@ const loginUser = async (credentials) => {
   const token = generateToken({ id: user.id, email: user.email });
   const refreshToken = generateRefreshToken({ id: user.id });
 
-  await db.updateRefreshToken(user.id, refreshToken);
+  // SPREMAMO HASH U BAZU
+  await db.updateRefreshToken(user.id, hashToken(refreshToken));
 
   return {
     token,
@@ -91,9 +98,10 @@ const refreshUserToken = async (refreshToken) => {
   const db = getDB();
   
   const decoded = verifyRefreshToken(refreshToken);
-  
   const user = await db.getUserById(decoded.id);
-  if (!user || user.refresh_token !== refreshToken) {
+  
+  // USPOREĐUJEMO HASH IZ REQUESTA S HASHOM IZ BAZE
+  if (!user || user.refresh_token !== hashToken(refreshToken)) {
     throw new Error('Invalid refresh token');
   }
 

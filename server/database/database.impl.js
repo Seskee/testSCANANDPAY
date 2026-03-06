@@ -10,7 +10,15 @@ const { Pool } = require('pg');
 // ============================================
 function buildSetClause(input, startIndex = 1) {
   const entries = Object.entries(input).filter(([, v]) => v !== undefined);
-  const clause = entries.map(([key], i) => `${key} = $${startIndex + i}`).join(', ');
+  
+  const clause = entries.map(([key], i) => {
+    // STRIKTNA SANITIZACIJA: Ključ smije sadržavati samo slova, brojeve i donju crtu
+    if (!/^[a-zA-Z0-9_]+$/.test(key)) {
+      throw new Error(`CRITICAL: Invalid column name detected: ${key}`);
+    }
+    return `"${key}" = $${startIndex + i}`;
+  }).join(', ');
+  
   const values = entries.map(([, v]) => v);
   return { clause, values, nextIndex: startIndex + entries.length };
 }
@@ -397,7 +405,7 @@ class PostgresDatabase {
     const countRow = await this.queryOne(`SELECT COUNT(*) FROM bills ${where}`, values);
     const total = parseInt(countRow?.count ?? '0', 10);
 
-    const limit  = pagination?.limit  ?? 20;
+    const limit = Math.min(parseInt(pagination?.limit ?? 20), 100);
     const page   = pagination?.page   ?? 1;
     const offset = pagination?.offset ?? (page - 1) * limit;
 
@@ -594,7 +602,7 @@ class PostgresDatabase {
     const countRow = await this.queryOne(`SELECT COUNT(*) FROM payments ${where}`, values);
     const total = parseInt(countRow?.count ?? '0', 10);
 
-    const limit  = pagination?.limit  ?? 20;
+    const limit = Math.min(parseInt(pagination?.limit ?? 20), 100);
     const page   = pagination?.page   ?? 1;
     const offset = pagination?.offset ?? (page - 1) * limit;
 
@@ -617,6 +625,8 @@ class PostgresDatabase {
   }
 
   async markPaymentAsSucceeded(paymentId, stripeData) {
+    // BANK LEVEL: Dodano "AND status != 'succeeded'" na kraj query-ja.
+    // Ovo osigurava da webhook NE MOŽE dvaput proći i dvaput dodati novac na iznos računa.
     const payment = await this.queryOne(
       `UPDATE payments SET
          status = 'succeeded',
@@ -626,15 +636,13 @@ class PostgresDatabase {
          card_brand = $4,
          card_last4 = $5,
          paid_at = CURRENT_TIMESTAMP
-       WHERE id = $6 RETURNING *`,
-      [stripeData.stripe_charge_id, stripeData.stripe_payment_method_id ?? null,
+       WHERE id = $6 AND status != 'succeeded' RETURNING *`,[stripeData.stripe_charge_id, stripeData.stripe_payment_method_id ?? null,
        stripeData.payment_method_type ?? null, stripeData.card_brand ?? null,
        stripeData.card_last4 ?? null, paymentId]
     );
-    if (!payment) throw new Error('Payment not found');
+    
+    if (!payment) return null; // Ne bacamo error jer je to znak da je već procesuirano
     return payment;
-    // DB trigger update_bill_paid_amount → automatski ažurira bill.amount_paid
-    // DB trigger auto_update_bill_status → automatski ažurira bill.status
   }
 
   async markPaymentAsFailed(paymentId, failureCode, failureMessage) {
@@ -744,17 +752,19 @@ class PostgresDatabase {
   // SPLIT BILL — HIGH LEVEL OPERATION
   // ============================================
 
+  // ============================================
+  // SPLIT BILL — HIGH LEVEL OPERATION
+  // ============================================
+
   async validateSplitPayment(billId, items) {
-    const errors = [];
+    const errors =[];
     for (const item of items) {
       if (item.quantity <= 0) {
         errors.push(`Item ${item.bill_item_id}: količina mora biti pozitivna`);
         continue;
       }
-      // ISPRAVLJENO: Dodano FOR UPDATE kako bi se spriječio Race Condition (dvostruko plaćanje iste stavke)
       const billItem = await this.queryOne(
-        'SELECT * FROM bill_items WHERE id = $1 AND bill_id = $2 FOR UPDATE',
-        [item.bill_item_id, billId]
+        'SELECT * FROM bill_items WHERE id = $1 AND bill_id = $2',[item.bill_item_id, billId]
       );
       if (!billItem) {
         errors.push(`Item ${item.bill_item_id} ne postoji na ovom billu`);
@@ -768,92 +778,99 @@ class PostgresDatabase {
   }
 
   async createSplitPayment(request) {
-    // Kreira payment + payment_items u jednoj transakciji
-    // Stripe poziv se radi NAKON — u paymentService.js
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
 
-      const validation = await this.validateSplitPayment(request.bill_id, request.items);
-      if (!validation.valid) {
-        throw new Error(`Validacija neuspješna: ${validation.errors.join(', ')}`);
-      }
-
-      const billResult = await client.query('SELECT * FROM bills WHERE id = $1', [request.bill_id]);
+      // 1. ZAKLJUČAJ CIJELI RAČUN DA SPRIJEČIŠ RACE CONDITION (FOR UPDATE)
+      const billResult = await client.query('SELECT * FROM bills WHERE id = $1 FOR UPDATE', [request.bill_id]);
       if (billResult.rows.length === 0) throw new Error('Bill not found');
       const bill = billResult.rows[0];
 
-      let subtotal = 0;
-      const enrichedItems = [];
-      
-      // Prolazimo kroz stavke koje gost želi platiti
-      for (const item of request.items) {
-        const biResult = await client.query(
-          'SELECT unit_price FROM bill_items WHERE id = $1', [item.bill_item_id]
+      // 2. IDEMPOTENCY PROVJERA (Sprječava duple naplate ako korisnik brza s klikovima)
+      if (request.metadata && request.metadata.idempotencyKey) {
+        const existingPayment = await client.query(
+          `SELECT id FROM payments WHERE metadata->>'idempotencyKey' = $1`, 
+          [request.metadata.idempotencyKey]
         );
-        const unit_price = Number(biResult.rows[0].unit_price);
-        const amount = Math.round(unit_price * item.quantity * 100) / 100;
-        subtotal += amount;
+        if (existingPayment.rows.length > 0) {
+          throw new Error('Duplicate payment request detected.');
+        }
+      }
+
+      let subtotalCents = 0;
+      const enrichedItems =[];
+      
+      // 3. ZAKLJUČAJ I VALIDIRAJ SVAKU STAVKU NA RAZINI BAZE
+      for (const item of request.items) {
+        if (item.quantity <= 0) throw new Error(`Item ${item.bill_item_id}: količina mora biti pozitivna`);
+        
+        const biResult = await client.query(
+          'SELECT * FROM bill_items WHERE id = $1 AND bill_id = $2 FOR UPDATE',[item.bill_item_id, request.bill_id]
+        );
+        
+        if (biResult.rows.length === 0) throw new Error(`Item ${item.bill_item_id} ne postoji na ovom billu`);
+        const billItem = biResult.rows[0];
+        
+        if (Number(billItem.quantity_remaining) < item.quantity) {
+          throw new Error(`Item "${billItem.name}": tražena količina ${item.quantity}, dostupno ${billItem.quantity_remaining}`);
+        }
+
+        // JS FINANCIJSKA MATEMATIKA: Pretvori u cente (integer) kako bi izbjegao float greške (npr. 0.1+0.2=0.3000000000004)
+        const unitPriceCents = Math.round(Number(billItem.unit_price) * 100);
+        const itemAmountCents = unitPriceCents * item.quantity;
+        subtotalCents += itemAmountCents;
+
         enrichedItems.push({ 
           bill_item_id: item.bill_item_id, 
           quantity: item.quantity, 
-          unit_price, 
-          amount 
+          unit_price: billItem.unit_price, 
+          amount: itemAmountCents / 100 
         });
       }
 
-      // --- LOGIKA ZA POREZ (FIX) ---
-      subtotal = Math.round(subtotal * 100) / 100;
+      // LOGIKA ZA POREZ I NAPOJNICU (Stroga Integer matematika)
+      const billSubtotalCents = Math.round(Number(bill.subtotal) * 100);
+      const billTaxCents = Math.round(Number(bill.tax_amount || 0) * 100);
       
-      // Izračunavamo stopu poreza s originalnog glavnog računa
-      const bill_subtotal = Number(bill.subtotal);
-      const bill_tax_amount = Number(bill.tax_amount || 0);
-      const tax_rate = bill_subtotal > 0 ? (bill_tax_amount / bill_subtotal) : 0;
+      let splitTaxCents = 0;
+      if (billSubtotalCents > 0) {
+        splitTaxCents = Math.round((subtotalCents * billTaxCents) / billSubtotalCents);
+      }
       
-      // Proporcionalni porez za ovaj dio (split) računa
-      const split_tax = Math.round((subtotal * tax_rate) * 100) / 100;
-      
-      const tip_amount = Math.round((Number(request.tip_amount) || 0) * 100) / 100;
-      
-      // TOTAL = Osnovica + Porez + Napojnica
-      const total_amount = Math.round((subtotal + split_tax + tip_amount) * 100) / 100;
+      const tipCents = Math.round((Number(request.tip_amount) || 0) * 100);
+      const totalCents = subtotalCents + splitTaxCents + tipCents;
 
-      // Unos u tablicu PAYMENTS (dodana kolona tax_amount)
+      // Unos u tablicu PAYMENTS
       const paymentResult = await client.query(
         `INSERT INTO payments
             (bill_id, restaurant_id, subtotal, tax_amount, tip_amount, total_amount,
-             guest_email, guest_name, status)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending') RETURNING *`,
-        [
+             guest_email, guest_name, status, metadata)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending', $9) RETURNING *`,[
           request.bill_id, 
           bill.restaurant_id, 
-          subtotal, 
-          split_tax, 
-          tip_amount, 
-          total_amount,
+          subtotalCents / 100, 
+          splitTaxCents / 100, 
+          tipCents / 100, 
+          totalCents / 100,
           request.guest_email || null, 
-          request.guest_name || null
+          request.guest_name || null,
+          request.metadata ? JSON.stringify(request.metadata) : null
         ]
       );
       const payment = paymentResult.rows[0];
 
-      // Unos stavki u PAYMENT_ITEMS
-      const paymentItems = [];
       for (const item of enrichedItems) {
-        const piResult = await client.query(
+        await client.query(
           `INSERT INTO payment_items (payment_id, bill_item_id, quantity, unit_price, amount)
-           VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-          [payment.id, item.bill_item_id, item.quantity, item.unit_price, item.amount]
+           VALUES ($1, $2, $3, $4, $5)`,[payment.id, item.bill_item_id, item.quantity, item.unit_price, item.amount]
         );
-        paymentItems.push(piResult.rows[0]);
       }
 
       await client.query('COMMIT');
-
-      // Vraćamo podatke servisu koji će kreirati Stripe Intent
       return {
         payment,
-        payment_items: paymentItems,
+        payment_items: enrichedItems,
         stripe_client_secret: `PENDING_STRIPE_${payment.id}`,
       };
     } catch (err) {
@@ -864,6 +881,10 @@ class PostgresDatabase {
       client.release();
     }
   }
+
+  // ============================================
+  // RECEIPT OPERATIONS
+      
 
   // ============================================
   // RECEIPT OPERATIONS
@@ -919,7 +940,7 @@ class PostgresDatabase {
     const countRow = await this.queryOne(`SELECT COUNT(*) FROM receipts ${where}`, values);
     const total = parseInt(countRow?.count ?? '0', 10);
 
-    const limit  = pagination?.limit  ?? 20;
+    const limit = Math.min(parseInt(pagination?.limit ?? 20), 100);
     const page   = pagination?.page   ?? 1;
     const offset = pagination?.offset ?? (page - 1) * limit;
 

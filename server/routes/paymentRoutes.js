@@ -3,17 +3,17 @@ const express = require('express');
 const router = express.Router();
 const { randomUUID } = require('crypto');
 const paymentService = require('../services/paymentService');
+const { authenticateToken } = require('./middleware/auth'); // DODANO ZA ZAŠTITU
 
+// PUBLIC RUTA - Gosti kreiraju plaćanja bez tokena
 router.post('/create', async (req, res) => {
   try {
     const { billId, items, tip, paymentMethod, customerEmail } = req.body;
 
-    // 1. Validacija napojnice
     if (tip !== undefined && (typeof tip !== 'number' || tip < 0 || tip > 10000)) {
       return res.status(400).json({ error: 'Tip must be a valid positive number' });
     }
 
-    // 2. Idempotency Key (Zaštita od duplog plaćanja)
     const idempotencyKey = req.headers['idempotency-key'] || req.body.idempotencyKey;
     if (!idempotencyKey && (!billId || !billId.startsWith('demo-'))) {
       return res.status(400).json({ error: 'Idempotency key is required to prevent double charges' });
@@ -33,7 +33,6 @@ router.post('/create', async (req, res) => {
       });
     }
 
-    // 3. Validacija ulaznih podataka
     if (!billId || !items || !paymentMethod) {
       return res.status(400).json({ error: 'Missing required fields: billId, items, paymentMethod' });
     }
@@ -42,7 +41,6 @@ router.post('/create', async (req, res) => {
       return res.status(400).json({ error: 'Items must be a non-empty array' });
     }
 
-    // 4. Stroga validacija stavki
     for (const item of items) {
       if (!item.itemId || typeof item.quantity !== 'number' || item.quantity <= 0) {
         return res.status(400).json({ error: 'Invalid item structure. Must have itemId and positive quantity.' });
@@ -70,6 +68,7 @@ router.post('/create', async (req, res) => {
   }
 });
 
+// PUBLIC RUTA - Gosti potvrđuju plaćanja
 router.post('/confirm/:paymentId', async (req, res) => {
   try {
     const { paymentId } = req.params;
@@ -104,7 +103,8 @@ router.post('/confirm/:paymentId', async (req, res) => {
   }
 });
 
-router.get('/:paymentId', async (req, res) => {
+// PRIVATE RUTA - Samo autorizirani restorani (authenticateToken)
+router.get('/:paymentId', authenticateToken, async (req, res) => {
   try {
     const payment = await paymentService.getPaymentById(req.params.paymentId);
     res.status(200).json({ payment });
@@ -113,7 +113,8 @@ router.get('/:paymentId', async (req, res) => {
   }
 });
 
-router.get('/intent/:intentId', async (req, res) => {
+// PRIVATE RUTA
+router.get('/intent/:intentId', authenticateToken, async (req, res) => {
   try {
     const payment = await paymentService.getPaymentByIntentId(req.params.intentId);
     res.status(200).json({ payment });
@@ -122,7 +123,8 @@ router.get('/intent/:intentId', async (req, res) => {
   }
 });
 
-router.post('/refund/:paymentId', async (req, res) => {
+// PRIVATE RUTA - SPRJEČAVA HAKERE DA RADE REFUND!
+router.post('/refund/:paymentId', authenticateToken, async (req, res) => {
   try {
     const result = await paymentService.refundPayment(req.params.paymentId, req.body.amount);
     res.status(200).json({
@@ -135,7 +137,8 @@ router.post('/refund/:paymentId', async (req, res) => {
   }
 });
 
-router.get('/restaurant/:restaurantId', async (req, res) => {
+// PRIVATE RUTA
+router.get('/restaurant/:restaurantId', authenticateToken, async (req, res) => {
   try {
     const { status, startDate, endDate, limit } = req.query;
     const payments = await paymentService.getRestaurantPayments(req.params.restaurantId, {
@@ -147,7 +150,8 @@ router.get('/restaurant/:restaurantId', async (req, res) => {
   }
 });
 
-router.get('/restaurant/:restaurantId/statistics', async (req, res) => {
+// PRIVATE RUTA
+router.get('/restaurant/:restaurantId/statistics', authenticateToken, async (req, res) => {
   try {
     const statistics = await paymentService.getPaymentStatistics(req.params.restaurantId, req.query.startDate, req.query.endDate);
     res.status(200).json({ statistics });

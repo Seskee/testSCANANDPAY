@@ -2,20 +2,14 @@
 const { getDB } = require('../config/database');
 const emailService = require('./emailService');
 
-// ISPRAVLJENO: Koristimo db.query umjesto db.pool.query za sigurniji i čišći pristup
-const generateReceiptNumber = async (db) => {
+const generateReceiptNumber = async (db, restaurantId) => {
   const year = new Date().getFullYear();
-  
-  // Koristimo db.query metodu koja bi trebala postojati u tvom database.js
   const result = await db.query(
-    `SELECT COUNT(*) + 1 AS next FROM receipts WHERE EXTRACT(YEAR FROM created_at) = $1`, 
-    [year]
+    'SELECT get_next_sequence_value($1, $2, $3) AS next_val',[restaurantId, 'receipt', year]
   );
   
-  // db.query obično vraća objekt koji sadrži rows, ali ovisi o tvojoj implementaciji.
-  // Zato pokrivamo oba slučaja (ako vraća {rows: [...]} ili direktno polje [...])
-  const nextNumber = result.rows ? result.rows[0].next : result[0].next;
-  
+  // SIGURNO DOHVAĆANJE: Sprečava crash ako baza ne vrati array (Optional Chaining)
+  const nextNumber = result?.rows?.[0]?.next_val || 1;
   return `RCP-${year}-${String(nextNumber).padStart(6, '0')}`;
 };
 
@@ -32,7 +26,8 @@ const generateReceipt = async (paymentId, customerEmail = null) => {
   const restaurant = await db.getRestaurantById(payment.restaurant_id);
   const items = await db.getPaymentItemsWithDetails(paymentId);
 
-  const receiptNumber = await generateReceiptNumber(db);
+  const receiptNumber = await generateReceiptNumber(db, payment.restaurant_id);
+  
   const receiptData = {
     restaurant: { name: restaurant?.name },
     items: items.map(i => ({
@@ -119,7 +114,7 @@ const getRestaurantReceipts = async (restaurantId, options = {}) => {
       date_from: startDate ? new Date(startDate) : undefined,
       date_to:   endDate   ? new Date(endDate)   : undefined,
     },
-    { limit, page: Math.floor(skip / limit) + 1 }
+    { limit: Math.min(limit, 100), page: Math.floor(skip / limit) + 1 }
   );
   return { receipts: result.data.map(r => ({ ...r, _id: r.id })), total: result.total, limit, skip };
 };

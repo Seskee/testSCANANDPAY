@@ -1,5 +1,6 @@
 // server/server.js
 require("dotenv").config();
+require("express-async-errors"); // SIGURNOSNI DODATAK: Hvata asinkrone greške da spriječi rušenje
 const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
@@ -9,7 +10,7 @@ const compression = require("compression");
 
 // Import utilita
 const logger = require('./utils/logger');
-const { connectDB } = require("./config/database");
+const { connectDB, closeDB } = require("./config/database"); // DODAN closeDB
 const { connectRedis } = require("./config/redis");
 const { apiLimiter, authLimiter } = require('./routes/middleware/rateLimiter');
 
@@ -31,6 +32,7 @@ if (!process.env.DATABASE_URL || !process.env.JWT_SECRET) {
 }
 
 const app = express();
+app.set('trust proxy', 1);
 const PORT = process.env.PORT || 3000;
 
 // 1. STRIPE WEBHOOK
@@ -41,8 +43,8 @@ app.use(helmet());
 app.use(cors({
   origin: process.env.CLIENT_URL || 'http://localhost:5173',
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'idempotency-key']
+  methods:['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
+  allowedHeaders:['Content-Type', 'Authorization', 'idempotency-key']
 }));
 
 app.use('/api', apiLimiter);
@@ -86,25 +88,48 @@ app.use((err, req, res, next) => {
   });
 });
 
-// 5. POKRETANJE SERVERA
+// 5. POKRETANJE SERVERA (S DODANIM GRACEFUL SHUTDOWNOM)
+let server;
 const startServer = async () => {
   try {
     await connectDB();
-    await connectRedis(); // Spajanje na Redis
+    await connectRedis();
 
-    const server = app.listen(PORT, '0.0.0.0', () => {
+    server = app.listen(PORT, '0.0.0.0', () => {
       logger.info(`🚀 Server running at http://localhost:${PORT}`);
       logger.info(`🔒 Enterprise Security Active (Helmet, XSS, HPP, Redis Cache)`);
     });
 
     process.on('unhandledRejection', (err) => {
-      logger.fatal(`UNHANDLED REJECTION! 💥 Shutting down... ${err.name}: ${err.message}`);
-      server.close(() => process.exit(1));
+      logger.fatal(`UNHANDLED REJECTION! 💥 ${err.name}: ${err.message}`);
     });
   } catch (err) {
     logger.fatal(`❌ Failed to start server: ${err.message}`);
     process.exit(1);
   }
 };
+
+// GRACEFUL SHUTDOWN - OBAVEZNO ZA FINANCIJE
+const gracefulShutdown = async (signal) => {
+  logger.info(`Received ${signal}. Shutting down gracefully...`);
+  if (server) {
+    server.close(async () => {
+      logger.info('HTTP server closed.');
+      // Ovdje gasimo bazu sigurno kako transakcije ne bi ostale visiti
+      await closeDB();
+      logger.info('Database connections closed.');
+      process.exit(0);
+    });
+
+    // Force shutdown nakon 10 sekundi ako zahtjevi zapnu
+    setTimeout(() => {
+      logger.error('Could not close connections in time, forcefully shutting down');
+      process.exit(1);
+    }, 10000);
+  }
+};
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
 startServer();

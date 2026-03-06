@@ -57,8 +57,48 @@ const generateAllQRCodes = async (restaurantId, userId) => {
   if (!restaurant) throw new Error('Restaurant not found');
   if (restaurant.owner_id !== userId.toString()) throw new Error('Unauthorized');
 
-  logger.info(`Bulk generating QR codes for Restaurant ${restaurantId}`);
-  return db.generateQRCodesForRestaurant(restaurantId, 'png', 512);
+  const tables = await db.getTablesByRestaurantId(restaurantId, true);
+  const frontendUrl = process.env.CLIENT_URL || 'http://localhost:5173';
+  const results =[];
+  
+  // PERFORMANCE FIX: "Chunking" sprečava Event Loop Block (Self-DoS). 
+  // Radimo 5 po 5 QR kodova i dajemo serveru pauzu da može obrađivati tuđa plaćanja.
+  const chunkSize = 5; 
+  for (let i = 0; i < tables.length; i += chunkSize) {
+    const chunk = tables.slice(i, i + chunkSize);
+    
+    const promises = chunk.map(async (table) => {
+      await db.execute('UPDATE qr_codes SET is_active = false WHERE table_id = $1',[table.id]);
+
+      const rawKey = crypto.randomBytes(32).toString('hex');
+      const hashedKey = hashToken(rawKey);
+      const paymentUrl = `${frontendUrl}/pay/${rawKey}`;
+      
+      const qrImageDataUrl = await qrcode.toDataURL(paymentUrl, {
+        errorCorrectionLevel: 'H', width: 512, margin: 2,
+      });
+
+      const qr = await db.createQRCode({
+        restaurant_id: restaurantId,
+        table_id: table.id,
+        qr_data: hashedKey,
+        qr_image_url: qrImageDataUrl,
+        format: 'png',
+        size: 512,
+      });
+
+      return { ...qr, _id: qr.id, tableNumber: table.table_number, paymentUrl };
+    });
+
+    const chunkResults = await Promise.all(promises);
+    results.push(...chunkResults);
+    
+    // Pauza od 20ms da Node.js procesira ostale HTTP requestove klijenata
+    await new Promise(resolve => setTimeout(resolve, 20)); 
+  }
+
+  logger.info(`Bulk generated ${results.length} QR codes for Restaurant ${restaurantId}`);
+  return results;
 };
 
 const getRestaurantQRCodes = async (restaurantId, userId) => {

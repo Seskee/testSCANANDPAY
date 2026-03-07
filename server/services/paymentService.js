@@ -78,7 +78,13 @@ const confirmPayment = async (paymentId) => {
 
   if (payment.status === 'succeeded') return { ...payment, _id: payment.id };
 
-  const intent = await stripeService.retrievePaymentIntent(payment.stripe_payment_intent_id);
+  // 🔒 ISPRAVAK: Dohvaćamo Stripe account ID restorana
+  const restaurant = await db.getRestaurantById(payment.restaurant_id);
+  const intent = await stripeService.retrievePaymentIntent(
+    payment.stripe_payment_intent_id, 
+    restaurant.stripe_account_id
+  );
+  
   if (intent.status !== 'succeeded') throw new Error('Payment not completed on Stripe');
 
   const updated = await db.markPaymentAsSucceeded(paymentId, {
@@ -118,7 +124,14 @@ const refundPayment = async (paymentId) => {
   const payment = await db.getPaymentById(paymentId);
   if (!payment) throw new Error('Payment not found');
 
-  const refund = await stripeService.createRefund(payment.stripe_payment_intent_id);
+  // 🔒 ISPRAVAK: Šaljemo Stripe Account ID pri refundu
+  const restaurant = await db.getRestaurantById(payment.restaurant_id);
+  const refund = await stripeService.createRefund(
+    payment.stripe_payment_intent_id, 
+    null, 
+    restaurant.stripe_account_id
+  );
+  
   const updated = await db.refundPayment(paymentId);
   return { refund, payment: { ...updated, _id: updated.id } };
 };

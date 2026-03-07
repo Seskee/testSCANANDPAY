@@ -33,13 +33,25 @@ const app = express();
 app.set('trust proxy', 1);
 const PORT = process.env.PORT || 3000;
 
-app.use("/webhooks", express.raw({ type: 'application/json' }), stripeWebhookRoutes);
+app.use("/webhooks", express.raw({ type: 'application/json', limit: '500kb' }), stripeWebhookRoutes);
 
 app.use(helmet());
+// BANK-GRADE SECURITY: Striktni CORS sa safety fallbackom
+const allowedOrigins = process.env.NODE_ENV === 'production' 
+  ?[process.env.CLIENT_URL || 'https://tvojadomena.com'] // ZAMIJENI sa svojom domenom
+  :['http://localhost:5173', 'http://127.0.0.1:5173'];
+
 app.use(cors({
-  origin: process.env.CLIENT_URL || 'http://localhost:5173',
+  origin: function (origin, callback) {
+    // allow requests with no origin (like mobile apps or curl requests)
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('CORS policy violation: Unauthorized origin'));
+    }
+  },
   credentials: true,
-  methods:['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
   allowedHeaders:['Content-Type', 'Authorization', 'idempotency-key']
 }));
 
@@ -127,12 +139,21 @@ const startServer = async () => {
 
 const gracefulShutdown = async (signal) => {
   logger.info(`Received ${signal}. Shutting down gracefully...`);
-  if (backgroundWorker) clearInterval(backgroundWorker); // Zaustavi workera
+  if (backgroundWorker) clearInterval(backgroundWorker); 
   
   if (server) {
     server.close(async () => {
       logger.info('HTTP server closed.');
       await closeDB();
+      
+      // 🔒 DODANO: Sprječava Memory Leak na Redis konekcijama pri restartu
+      const { getRedis } = require('./config/redis');
+      const redisClient = getRedis();
+      if (redisClient) {
+        await redisClient.quit();
+        logger.info('Redis connection closed.');
+      }
+      
       logger.info('Database connections closed.');
       process.exit(0);
     });

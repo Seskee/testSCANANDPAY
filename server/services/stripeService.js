@@ -25,7 +25,7 @@ const createAccountLink = async (stripeAccountId, restaurantId, refreshUrl, retu
 
 const getAccountDetails = async (stripeAccountId) => {
   if (stripeAccountId.startsWith('acct_test_')) {
-    return { id: stripeAccountId, chargesEnabled: true, payoutsEnabled: true, detailsSubmitted: true, requirements: { currently_due: [] } };
+    return { id: stripeAccountId, chargesEnabled: true, payoutsEnabled: true, detailsSubmitted: true, requirements: { currently_due:[] } };
   }
   const account = await stripe.accounts.retrieve(stripeAccountId);
   return {
@@ -48,8 +48,8 @@ const updateRestaurantStripeInfo = async (restaurantId, accountDetails) => {
 };
 
 const createPaymentIntent = async (amount, currency, paymentMethod, stripeAccountId, metadata = {}) => {
-  // FIX: Stripe očekuje payment_method_types kao array
-  const paymentMethodTypes = paymentMethod === 'card' ? ['card'] : [paymentMethod, 'card'];
+  // Stripe očekuje payment_method_types kao array
+  const paymentMethodTypes = paymentMethod === 'card' ?['card'] : [paymentMethod, 'card'];
 
   const intentParams = {
     amount: Math.round(amount), // Već je pomnoženo sa 100 u paymentService
@@ -58,18 +58,19 @@ const createPaymentIntent = async (amount, currency, paymentMethod, stripeAccoun
     metadata: { ...metadata },
   };
 
-  // FIX: Ako koristimo Stripe Connect, moramo dodati application_fee_amount
-  // Ovdje uzimamo 1% provizije za aplikaciju (Scan&Pay)
+  // Opcije za request (idempotency + na koji account ide)
+  const requestOptions = {
+    idempotencyKey: metadata?.idempotencyKey ? `${metadata.idempotencyKey}` : undefined,
+  };
+
+  // 🔒 BANK-GRADE FINANCIJSKA ZAKRPA: DIRECT CHARGES
+  // Restoran plaća Stripe naknade, a ti uzimaš 1% čiste dobiti
   if (stripeAccountId && !stripeAccountId.startsWith('acct_test_')) {
-    intentParams.application_fee_amount = Math.round(amount * 0.01); // 1% fee
-    intentParams.transfer_data = {
-      destination: stripeAccountId,
-    };
+    intentParams.application_fee_amount = Math.round(amount * 0.01); // Tvoj 1% fee
+    requestOptions.stripeAccount = stripeAccountId; // Direct Charge na ime restorana
   }
 
-  const intent = await stripe.paymentIntents.create(intentParams, {
-    idempotencyKey: metadata?.idempotencyKey ? `${metadata.idempotencyKey}` : undefined,
-  });
+  const intent = await stripe.paymentIntents.create(intentParams, requestOptions);
   
   console.log(`Payment intent kreiran: ${intent.id}`);
   return intent;
@@ -79,20 +80,27 @@ const confirmPaymentIntent = async (paymentIntentId, paymentMethodId) => {
   return stripe.paymentIntents.confirm(paymentIntentId, { payment_method: paymentMethodId });
 };
 
-const retrievePaymentIntent = async (paymentIntentId) => {
-  return stripe.paymentIntents.retrieve(paymentIntentId);
+const retrievePaymentIntent = async (paymentIntentId, stripeAccountId) => {
+  // Ako je Direct Charge, moramo Stripeu reći na čijem se računu ovo nalazi!
+  const options = (stripeAccountId && !stripeAccountId.startsWith('acct_test_')) 
+    ? { stripeAccount: stripeAccountId } 
+    : undefined;
+  return stripe.paymentIntents.retrieve(paymentIntentId, options);
 };
 
-const createRefund = async (paymentIntentId, amount) => {
+const createRefund = async (paymentIntentId, amount, stripeAccountId) => {
+  const options = (stripeAccountId && !stripeAccountId.startsWith('acct_test_')) 
+    ? { stripeAccount: stripeAccountId } 
+    : undefined;
   return stripe.refunds.create({
     payment_intent: paymentIntentId,
     amount: amount ? Math.round(amount * 100) : undefined,
-  });
+  }, options);
 };
 
 const getAccountBalance = async (stripeAccountId) => {
   if (stripeAccountId.startsWith('acct_test_')) {
-    return { available: [{ amount: 100000, currency: 'eur' }], pending: [{ amount: 50000, currency: 'eur' }] };
+    return { available: [{ amount: 100000, currency: 'eur' }], pending:[{ amount: 50000, currency: 'eur' }] };
   }
   return stripe.balance.retrieve({ stripeAccount: stripeAccountId });
 };

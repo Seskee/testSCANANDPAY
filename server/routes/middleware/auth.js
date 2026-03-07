@@ -18,12 +18,18 @@ const authenticateToken = async (req, res, next) => {
     // 2. Verificiraj token
     const decoded = verifyToken(token);
 
-    // 3. Provjeri postoji li korisnik još uvijek u bazi (možda je obrisan u međuvremenu)
+    // 3. Provjeri postoji li korisnik još uvijek u bazi
     const db = getDB();
     const currentUser = await db.getUserById(decoded.id || decoded.userId);
     
     if (!currentUser) {
       return res.status(401).json({ error: 'The user belonging to this token no longer exists.' });
+    }
+
+    // 🔒 1000% SECURE FIX: Ako je refresh_token null, korisnik se odjavio!
+    // Ovo sprječava korištenje ukradenog access tokena nakon logout-a
+    if (!currentUser.refresh_token) {
+      return res.status(401).json({ error: 'Session terminated. Please log in again.' });
     }
 
     // 4. Stavi korisnika u request objekt

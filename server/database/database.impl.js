@@ -305,7 +305,9 @@ class PostgresDatabase {
   }
 
   async deleteBill(billId) {
-    await this.execute('DELETE FROM bills WHERE id = $1', [billId]);
+    // BANK-GRADE: Nikada ne brišemo financijski zapis fizički!
+    // Mijenjamo status u 'void' kako bi ostao trag u bazi za reviziju.
+    await this.execute("UPDATE bills SET status = 'void', updated_at = CURRENT_TIMESTAMP WHERE id = $1",[billId]);
   }
 
   async updateBillAmountPaid(billId, amount) {
@@ -335,24 +337,24 @@ class PostgresDatabase {
 
   async createBillItemsBatch(items) {
     if (items.length === 0) return[];
-    const client = await this.pool.connect();
-    try {
-      await client.query('BEGIN');
-      const results =[];
-      for (const item of items) {
-        const result = await client.query(
-          `INSERT INTO bill_items (bill_id, pos_item_id, name, description, category, unit_price, quantity) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,[item.bill_id, item.pos_item_id ?? null, item.name, item.description ?? null, item.category ?? null, item.unit_price, item.quantity]
-        );
-        results.push(result.rows[0]);
-      }
-      await client.query('COMMIT');
-      return results;
-    } catch (err) {
-      await client.query('ROLLBACK');
-      throw err;
-    } finally {
-      client.release();
+    
+    // BANK-GRADE OPTIMIZATION: Single bulk insert sprječava Event Loop block
+    const values =[];
+    const queryParams =[];
+    let paramIndex = 1;
+
+    for (const item of items) {
+      values.push(`($${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++})`);
+      queryParams.push(item.bill_id, item.pos_item_id ?? null, item.name, item.description ?? null, item.category ?? null, item.unit_price, item.quantity);
     }
+
+    const query = `
+      INSERT INTO bill_items (bill_id, pos_item_id, name, description, category, unit_price, quantity) 
+      VALUES ${values.join(', ')} 
+      RETURNING *
+    `;
+
+    return this.query(query, queryParams);
   }
 
   async getBillItemById(itemId) {
@@ -379,7 +381,12 @@ class PostgresDatabase {
   }
 
   async deleteBillItem(itemId) {
-    await this.execute('DELETE FROM bill_items WHERE id = $1',[itemId]);
+    // Ako je item već plaćen, zabrani brisanje (sigurnosna provjera)
+    const item = await this.queryOne('SELECT quantity_paid FROM bill_items WHERE id = $1', [itemId]);
+    if (item && parseFloat(item.quantity_paid) > 0) {
+      throw new Error('Cannot delete an item that has already been partially or fully paid.');
+    }
+    await this.execute('DELETE FROM bill_items WHERE id = $1', [itemId]);
   }
 
   async updateBillItemQuantityPaid(itemId, quantity) {
@@ -494,26 +501,26 @@ class PostgresDatabase {
     return item;
   }
 
-  async createPaymentItemsBatch(items) {
+ async createPaymentItemsBatch(items) {
     if (items.length === 0) return[];
-    const client = await this.pool.connect();
-    try {
-      await client.query('BEGIN');
-      const results =[];
-      for (const item of items) {
-        const result = await client.query(
-          `INSERT INTO payment_items (payment_id, bill_item_id, quantity, unit_price, amount) VALUES ($1,$2,$3,$4,$5) RETURNING *`,[item.payment_id, item.bill_item_id, item.quantity, item.unit_price, item.amount]
-        );
-        results.push(result.rows[0]);
-      }
-      await client.query('COMMIT');
-      return results;
-    } catch (err) {
-      await client.query('ROLLBACK');
-      throw err;
-    } finally {
-      client.release();
+    
+    // BANK-GRADE OPTIMIZATION: Jedan jedini query za sve iteme
+    const values = [];
+    const queryParams =[];
+    let paramIndex = 1;
+
+    for (const item of items) {
+      values.push(`($${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++})`);
+      queryParams.push(item.payment_id, item.bill_item_id, item.quantity, item.unit_price, item.amount);
     }
+
+    const query = `
+      INSERT INTO payment_items (payment_id, bill_item_id, quantity, unit_price, amount) 
+      VALUES ${values.join(', ')} 
+      RETURNING *
+    `;
+
+    return this.query(query, queryParams);
   }
 
   async getPaymentItemsByPaymentId(paymentId) {

@@ -1,5 +1,16 @@
 const nodemailer = require('nodemailer');
 
+// 🔒 XSS Zaštita za HTML emailove
+const escapeHTML = (str) => {
+  if (!str) return '';
+  return str.toString()
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+};
+
 class EmailService {
   constructor() {
     this.transporter = null;
@@ -10,7 +21,6 @@ class EmailService {
 
   initializeTransporter() {
     try {
-      // Check if we have email configuration
       const emailConfig = {
         host: process.env.EMAIL_HOST,
         port: parseInt(process.env.EMAIL_PORT || '587'),
@@ -21,7 +31,6 @@ class EmailService {
         }
       };
 
-      // If no email configuration, use ethereal for testing
       if (!emailConfig.host || !emailConfig.auth.user) {
         console.log('No email configuration found, running in test mode (emails will not be sent)');
         this.initialized = false;
@@ -90,9 +99,15 @@ class EmailService {
       createdAt
     } = receiptData;
 
+    // 🔒 SIGURNO: Escapeanje korisničkih inputa prije ubacivanja u HTML
+    const safeRestaurantName = escapeHTML(restaurantName);
+    const safeTableNumber = escapeHTML(tableNumber);
+    const safeTransactionId = escapeHTML(transactionId);
+    const safeReceiptNumber = escapeHTML(receiptNumber);
+
     const itemsHTML = items.map(item => `
       <tr>
-        <td style="padding: 8px; border-bottom: 1px solid #eee;">${item.name}</td>
+        <td style="padding: 8px; border-bottom: 1px solid #eee;">${escapeHTML(item.name)}</td>
         <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: center;">${item.quantity}</td>
         <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: right;">€${item.price.toFixed(2)}</td>
         <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: right;">€${item.total.toFixed(2)}</td>
@@ -109,7 +124,7 @@ class EmailService {
       <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Receipt #${receiptNumber}</title>
+        <title>Receipt #${safeReceiptNumber}</title>
       </head>
       <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
         <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0;">
@@ -120,11 +135,11 @@ class EmailService {
         <div style="background: white; padding: 30px; border: 1px solid #ddd; border-top: none; border-radius: 0 0 10px 10px;">
           <div style="margin-bottom: 30px;">
             <h2 style="color: #667eea; margin-bottom: 10px;">Receipt Details</h2>
-            <p style="margin: 5px 0;"><strong>Receipt Number:</strong> ${receiptNumber}</p>
+            <p style="margin: 5px 0;"><strong>Receipt Number:</strong> ${safeReceiptNumber}</p>
             <p style="margin: 5px 0;"><strong>Date:</strong> ${new Date(createdAt).toLocaleString()}</p>
-            <p style="margin: 5px 0;"><strong>Restaurant:</strong> ${restaurantName}</p>
-            <p style="margin: 5px 0;"><strong>Table:</strong> ${tableNumber}</p>
-            <p style="margin: 5px 0;"><strong>Transaction ID:</strong> ${transactionId}</p>
+            <p style="margin: 5px 0;"><strong>Restaurant:</strong> ${safeRestaurantName}</p>
+            <p style="margin: 5px 0;"><strong>Table:</strong> ${safeTableNumber}</p>
+            <p style="margin: 5px 0;"><strong>Transaction ID:</strong> ${safeTransactionId}</p>
           </div>
 
           <div style="margin-bottom: 30px;">

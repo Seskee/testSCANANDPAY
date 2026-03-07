@@ -24,9 +24,13 @@ const timingSafeCompare = (a, b) => {
   return crypto.timingSafeEqual(bufA, bufB);
 };
 
+// server/services/authService.js — ISPRAVNO
 const registerUser = async (userData) => {
   const { email, password, restaurantName, tableCount = 10 } = userData;
   const db = getDB();
+
+  // Validacija tableCount
+  const sanitizedTableCount = Math.max(1, Math.min(parseInt(tableCount) || 10, 500));
 
   const existing = await db.getUserByEmail(email.toLowerCase().trim());
   if (existing) throw new Error('User with this email already exists');
@@ -47,8 +51,23 @@ const registerUser = async (userData) => {
     country: 'HR',
     default_currency: 'EUR',
     timezone: 'Europe/Zagreb',
-    table_count: tableCount
+    table_count: sanitizedTableCount
   });
+
+  const tableNumbers = Array.from({ length: sanitizedTableCount }, (_, i) => String(i + 1));
+  await db.createTablesBatch(restaurant.id, tableNumbers);
+
+  const token = generateToken({ id: user.id, email: user.email });
+  const refreshToken = generateRefreshToken({ id: user.id });
+
+  await db.updateRefreshToken(user.id, hashToken(refreshToken));
+
+  return {
+    token,
+    refreshToken,
+    user: sanitizeUser(user, restaurant),
+  };
+};
 
   const tableNumbers = Array.from({ length: tableCount }, (_, i) => String(i + 1));
   await db.createTablesBatch(restaurant.id, tableNumbers);
@@ -63,7 +82,7 @@ const registerUser = async (userData) => {
     refreshToken,
     user: sanitizeUser(user, restaurant),
   };
-};
+
 
 const loginUser = async (credentials) => {
   const { email, password } = credentials;

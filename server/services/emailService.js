@@ -1,3 +1,4 @@
+// server/services/emailService.js
 const nodemailer = require('nodemailer');
 
 // 🔒 XSS Zaštita za HTML emailove
@@ -9,6 +10,13 @@ const escapeHTML = (str) => {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;");
+};
+
+// 🔒 Validacija email adrese
+const isValidEmail = (email) => {
+  if (!email || typeof email !== 'string') return false;
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  return emailRegex.test(email.trim()) && email.length <= 254;
 };
 
 class EmailService {
@@ -48,6 +56,12 @@ class EmailService {
 
   async sendReceiptEmail(receiptData) {
     try {
+      // 🔒 Validacija email adrese prije slanja
+      if (!isValidEmail(receiptData.customerEmail)) {
+        console.error(`Invalid customer email address: ${receiptData.customerEmail}`);
+        return { success: false, error: 'Invalid email address' };
+      }
+
       console.log(`Preparing to send receipt email to: ${receiptData.customerEmail}`);
 
       if (!this.initialized) {
@@ -80,7 +94,9 @@ class EmailService {
       };
     } catch (error) {
       console.error('Error sending receipt email:', error);
-      throw new Error(`Failed to send receipt email: ${error.message}`);
+      // 🔒 ISPRAVAK: Ne bacamo exception — vracamo failure objekt
+      // da crash emaila ne rusi cijeli payment flow (receipt je vec kreiran u bazi)
+      return { success: false, error: error.message };
     }
   }
 
@@ -89,11 +105,11 @@ class EmailService {
       receiptNumber,
       restaurantName,
       tableNumber,
-      items,
-      subtotal,
-      tipAmount,
+      items = [],
+      subtotal = 0,
+      tipAmount = 0,
       tipPercentage,
-      totalAmount,
+      totalAmount = 0,
       paymentMethod,
       transactionId,
       createdAt
@@ -101,26 +117,33 @@ class EmailService {
 
     // 🔒 SIGURNO: Escapeanje korisničkih inputa prije ubacivanja u HTML
     const safeRestaurantName = escapeHTML(restaurantName);
-    const safeTableNumber = escapeHTML(tableNumber);
-    const safeTransactionId = escapeHTML(transactionId);
-    const safeReceiptNumber = escapeHTML(receiptNumber);
+    const safeTableNumber    = escapeHTML(tableNumber);
+    const safeTransactionId  = escapeHTML(transactionId);
+    const safeReceiptNumber  = escapeHTML(receiptNumber);
 
+    // 🔒 ISPRAVAK: Null-safe na svakom itemu — price/total mogu biti undefined
     const itemsHTML = items.map(item => `
       <tr>
         <td style="padding: 8px; border-bottom: 1px solid #eee;">${escapeHTML(item.name)}</td>
-        <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: center;">${item.quantity}</td>
-        <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: right;">€${item.price.toFixed(2)}</td>
-        <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: right;">€${item.total.toFixed(2)}</td>
+        <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: center;">${Number(item.quantity || 0)}</td>
+        <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: right;">€${Number(item.price || 0).toFixed(2)}</td>
+        <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: right;">€${Number(item.total || 0).toFixed(2)}</td>
       </tr>
     `).join('');
 
+    // 🔒 ISPRAVAK: tipAmount moze biti null/undefined — Number() garantira 0
+    const safeTipAmount = Number(tipAmount || 0);
     const tipDisplay = tipPercentage
-      ? `€${tipAmount.toFixed(2)} (${tipPercentage}%)`
-      : `€${tipAmount.toFixed(2)}`;
+      ? `€${safeTipAmount.toFixed(2)} (${tipPercentage}%)`
+      : `€${safeTipAmount.toFixed(2)}`;
+
+    const formattedDate = createdAt
+      ? new Date(createdAt).toLocaleString('hr-HR', { timeZone: 'Europe/Zagreb' })
+      : new Date().toLocaleString('hr-HR', { timeZone: 'Europe/Zagreb' });
 
     return `
       <!DOCTYPE html>
-      <html>
+      <html lang="hr">
       <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -128,7 +151,7 @@ class EmailService {
       </head>
       <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
         <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0;">
-          <h1 style="margin: 0; font-size: 28px;">Scan&Pay</h1>
+          <h1 style="margin: 0; font-size: 28px;">Scan&amp;Pay</h1>
           <p style="margin: 10px 0 0 0; font-size: 16px;">Thank you for your payment!</p>
         </div>
 
@@ -136,9 +159,9 @@ class EmailService {
           <div style="margin-bottom: 30px;">
             <h2 style="color: #667eea; margin-bottom: 10px;">Receipt Details</h2>
             <p style="margin: 5px 0;"><strong>Receipt Number:</strong> ${safeReceiptNumber}</p>
-            <p style="margin: 5px 0;"><strong>Date:</strong> ${new Date(createdAt).toLocaleString()}</p>
+            <p style="margin: 5px 0;"><strong>Date:</strong> ${formattedDate}</p>
             <p style="margin: 5px 0;"><strong>Restaurant:</strong> ${safeRestaurantName}</p>
-            <p style="margin: 5px 0;"><strong>Table:</strong> ${safeTableNumber}</p>
+            ${safeTableNumber ? `<p style="margin: 5px 0;"><strong>Table:</strong> ${safeTableNumber}</p>` : ''}
             <p style="margin: 5px 0;"><strong>Transaction ID:</strong> ${safeTransactionId}</p>
           </div>
 
@@ -162,32 +185,33 @@ class EmailService {
           <div style="margin-bottom: 30px; padding: 20px; background-color: #f8f9fa; border-radius: 8px;">
             <div style="display: flex; justify-content: space-between; margin-bottom: 10px;">
               <span>Subtotal:</span>
-              <span>€${subtotal.toFixed(2)}</span>
+              <span>€${Number(subtotal || 0).toFixed(2)}</span>
             </div>
+            ${safeTipAmount > 0 ? `
             <div style="display: flex; justify-content: space-between; margin-bottom: 10px;">
               <span>Tip:</span>
               <span>${tipDisplay}</span>
-            </div>
+            </div>` : ''}
             <div style="display: flex; justify-content: space-between; padding-top: 10px; border-top: 2px solid #667eea; font-size: 18px; font-weight: bold;">
               <span>Total:</span>
-              <span style="color: #667eea;">€${totalAmount.toFixed(2)}</span>
+              <span style="color: #667eea;">€${Number(totalAmount || 0).toFixed(2)}</span>
             </div>
           </div>
 
           <div style="margin-bottom: 20px;">
             <p style="margin: 5px 0;"><strong>Payment Method:</strong> ${this.formatPaymentMethod(paymentMethod)}</p>
-            <p style="margin: 5px 0;"><strong>Status:</strong> <span style="color: #28a745; font-weight: bold;">Paid</span></p>
+            <p style="margin: 5px 0;"><strong>Status:</strong> <span style="color: #28a745; font-weight: bold;">Paid ✓</span></p>
           </div>
 
           <div style="text-align: center; padding: 20px; background-color: #f8f9fa; border-radius: 8px; margin-top: 30px;">
-            <p style="margin: 0; color: #666; font-size: 14px;">Thank you for choosing Scan&Pay</p>
+            <p style="margin: 0; color: #666; font-size: 14px;">Thank you for choosing Scan&amp;Pay</p>
             <p style="margin: 10px 0 0 0; color: #999; font-size: 12px;">If you have any questions about this receipt, please contact the restaurant directly.</p>
           </div>
         </div>
 
         <div style="text-align: center; padding: 20px; color: #999; font-size: 12px;">
-          <p style="margin: 0;">This is an automated receipt from Scan&Pay</p>
-          <p style="margin: 5px 0 0 0;">&copy; ${new Date().getFullYear()} Scan&Pay. All rights reserved.</p>
+          <p style="margin: 0;">This is an automated receipt from Scan&amp;Pay</p>
+          <p style="margin: 5px 0 0 0;">&copy; ${new Date().getFullYear()} Scan&amp;Pay. All rights reserved.</p>
         </div>
       </body>
       </html>
@@ -199,32 +223,38 @@ class EmailService {
       receiptNumber,
       restaurantName,
       tableNumber,
-      items,
-      subtotal,
-      tipAmount,
+      items = [],
+      subtotal = 0,
+      tipAmount = 0,
       tipPercentage,
-      totalAmount,
+      totalAmount = 0,
       paymentMethod,
       transactionId,
       createdAt
     } = receiptData;
 
+    // 🔒 ISPRAVAK: Null-safe na svim brojevnim poljima
     const itemsText = items.map(item =>
-      `${item.name} x${item.quantity} - €${item.price.toFixed(2)} = €${item.total.toFixed(2)}`
+      `${item.name} x${Number(item.quantity || 0)} - €${Number(item.price || 0).toFixed(2)} = €${Number(item.total || 0).toFixed(2)}`
     ).join('\n');
 
+    const safeTipAmount = Number(tipAmount || 0);
     const tipDisplay = tipPercentage
-      ? `€${tipAmount.toFixed(2)} (${tipPercentage}%)`
-      : `€${tipAmount.toFixed(2)}`;
+      ? `€${safeTipAmount.toFixed(2)} (${tipPercentage}%)`
+      : `€${safeTipAmount.toFixed(2)}`;
+
+    const formattedDate = createdAt
+      ? new Date(createdAt).toLocaleString('hr-HR', { timeZone: 'Europe/Zagreb' })
+      : new Date().toLocaleString('hr-HR', { timeZone: 'Europe/Zagreb' });
 
     return `
 SCAN&PAY RECEIPT
 ================
 
 Receipt Number: ${receiptNumber}
-Date: ${new Date(createdAt).toLocaleString()}
+Date: ${formattedDate}
 Restaurant: ${restaurantName}
-Table: ${tableNumber}
+${tableNumber ? `Table: ${tableNumber}` : ''}
 Transaction ID: ${transactionId}
 
 ORDER ITEMS
@@ -233,12 +263,12 @@ ${itemsText}
 
 PAYMENT SUMMARY
 ---------------
-Subtotal: €${subtotal.toFixed(2)}
-Tip: ${tipDisplay}
-Total: €${totalAmount.toFixed(2)}
+Subtotal: €${Number(subtotal || 0).toFixed(2)}
+${safeTipAmount > 0 ? `Tip: ${tipDisplay}` : ''}
+Total: €${Number(totalAmount || 0).toFixed(2)}
 
 Payment Method: ${this.formatPaymentMethod(paymentMethod)}
-Status: PAID
+Status: PAID ✓
 
 Thank you for choosing Scan&Pay!
 
@@ -252,13 +282,13 @@ This is an automated receipt from Scan&Pay
 
   formatPaymentMethod(method) {
     const methodMap = {
-      'apple_pay': 'Apple Pay',
+      'apple_pay':  'Apple Pay',
       'google_pay': 'Google Pay',
-      'paypal': 'PayPal',
-      'aircash': 'AirCash',
-      'card': 'Credit Card'
+      'paypal':     'PayPal',
+      'aircash':    'AirCash',
+      'card':       'Credit Card'
     };
-    return methodMap[method] || method;
+    return methodMap[method] || (method ? String(method) : 'Card');
   }
 
   async verifyConnection() {

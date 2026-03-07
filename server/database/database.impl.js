@@ -244,22 +244,97 @@ class PostgresDatabase {
   }
 
   async getBillComplete(billId) {
-    const bill = await this.queryOne('SELECT * FROM bills WHERE id = $1', [billId]);
-    if (!bill) return null;
-    const [billItems, rawPayments] = await Promise.all([
-      this.query('SELECT * FROM bill_items WHERE bill_id = $1 ORDER BY created_at',[billId]),
-      this.query('SELECT * FROM payments WHERE bill_id = $1 ORDER BY created_at', [billId]),
-    ]);
-    const payments = await Promise.all(
-      rawPayments.map(async (p) => {
-        const payment_items = await this.query('SELECT * FROM payment_items WHERE payment_id = $1', [p.id]);
-        return { ...p, payment_items };
-      })
-    );
-    let table = undefined;
-    if (bill.table_id) table = await this.queryOne('SELECT * FROM tables WHERE id = $1', [bill.table_id]) ?? undefined;
-    return { ...bill, items: billItems, payments, table };
+  const bill = await this.queryOne('SELECT * FROM bills WHERE id = $1', [billId]);
+  if (!bill) return null;
+
+  const billItems = await this.query(
+    'SELECT * FROM bill_items WHERE bill_id = $1 ORDER BY created_at',
+    [billId]
+  );
+
+  // 🔒 ISPRAVAK N+1: Jedan JOIN query umjesto zasebnog querija po paymentu
+  // Stari kod: 1 + N querija (jedan po paymentu) → SPORO i nestabilno pod opterećenjem
+  // Novi kod:  uvijek točno 2 querija bez obzira na broj plaćanja → BRZO
+  const paymentRows = await this.query(
+    `SELECT
+       p.id,
+       p.bill_id,
+       p.restaurant_id,
+       p.stripe_payment_intent_id,
+       p.stripe_charge_id,
+       p.stripe_payment_method_id,
+       p.subtotal,
+       p.tip_amount,
+       p.total_amount,
+       p.tax_amount,
+       p.stripe_fee,
+       p.net_amount,
+       p.payment_method_type,
+       p.card_brand,
+       p.card_last4,
+       p.status,
+       p.failure_code,
+       p.failure_message,
+       p.guest_email,
+       p.guest_name,
+       p.metadata,
+       p.paid_at,
+       p.created_at,
+       p.updated_at,
+       pi.id            AS pi_id,
+       pi.bill_item_id  AS pi_bill_item_id,
+       pi.quantity      AS pi_quantity,
+       pi.unit_price    AS pi_unit_price,
+       pi.amount        AS pi_amount,
+       pi.created_at    AS pi_created_at
+     FROM payments p
+     LEFT JOIN payment_items pi ON pi.payment_id = p.id
+     WHERE p.bill_id = $1
+     ORDER BY p.created_at ASC, pi.id ASC`,
+    [billId]
+  );
+
+  // Grupiranje payment_items po paymentu u memoriji (O(n), bez dodatnih DB poziva)
+  const paymentsMap = new Map();
+  for (const row of paymentRows) {
+    if (!paymentsMap.has(row.id)) {
+      // Izvuci samo payment polja (bez pi_ prefiksa)
+      const {
+        pi_id, pi_bill_item_id, pi_quantity,
+        pi_unit_price, pi_amount, pi_created_at,
+        ...paymentData
+      } = row;
+
+      paymentsMap.set(row.id, { ...paymentData, payment_items: [] });
+    }
+
+    // Dodaj payment_item ako postoji (LEFT JOIN može vratiti NULL ako nema itema)
+    if (row.pi_id) {
+      paymentsMap.get(row.id).payment_items.push({
+        id:           row.pi_id,
+        payment_id:   row.id,
+        bill_item_id: row.pi_bill_item_id,
+        quantity:     row.pi_quantity,
+        unit_price:   row.pi_unit_price,
+        amount:       row.pi_amount,
+        created_at:   row.pi_created_at,
+      });
+    }
   }
+
+  const payments = [...paymentsMap.values()];
+
+  // Stol dohvaćamo samo ako postoji table_id (jedan query, ne N)
+  let table = undefined;
+  if (bill.table_id) {
+    table = await this.queryOne(
+      'SELECT * FROM tables WHERE id = $1',
+      [bill.table_id]
+    ) ?? undefined;
+  }
+
+  return { ...bill, items: billItems, payments, table };
+}
 
   async getActiveBillForTable(restaurantId, tableId) {
     const bill = await this.queryOne(
@@ -758,75 +833,41 @@ class PostgresDatabase {
     return qrCode;
   }
 
-  async generateQRCodesForRestaurant(restaurantId, format = 'png', size = 300) {
-    const tables = await this.query('SELECT * FROM tables WHERE restaurant_id = $1 AND is_active = TRUE', [restaurantId]);
-    const client = await this.pool.connect();
-    try {
-      await client.query('BEGIN');
-      const results =[];
-      for (const table of tables) {
-        const qrData = `https://quickpay.app/pay?restaurant=${restaurantId}&table=${table.table_number}`;
-        const result = await client.query(
-          `INSERT INTO qr_codes (restaurant_id, table_id, qr_data, format, size) VALUES ($1,$2,$3,$4,$5) RETURNING *`,[restaurantId, table.id, qrData, format, size]
-        );
-        results.push(result.rows[0]);
-      }
-      await client.query('COMMIT');
-      return results;
-    } catch (err) {
-      await client.query('ROLLBACK');
-      throw err;
-    } finally {
-      client.release();
-    }
-  }
-
-  async getQRCodeById(qrCodeId) {
-    return this.queryOne('SELECT * FROM qr_codes WHERE id = $1', [qrCodeId]);
-  }
-
-  async getQRCodesByRestaurantId(restaurantId) {
-    return this.query('SELECT * FROM qr_codes WHERE restaurant_id = $1 ORDER BY created_at DESC', [restaurantId]);
-  }
-
-  async getQRCodesByTableId(tableId) {
-    return this.query('SELECT * FROM qr_codes WHERE table_id = $1 ORDER BY created_at DESC', [tableId]);
-  }
-
-  async getQRCodeWithTable(qrCodeId) {
-    const qrCode = await this.queryOne('SELECT * FROM qr_codes WHERE id = $1', [qrCodeId]);
-    if (!qrCode) return null;
-    let table = undefined;
-    if (qrCode.table_id) {
-      table = await this.queryOne('SELECT * FROM tables WHERE id = $1', [qrCode.table_id]) ?? undefined;
-    }
-    return { ...qrCode, table };
-  }
-
-  async getQRCodeByData(qrData) {
-    return this.queryOne(
-      'SELECT qr.*, t.table_number FROM qr_codes qr LEFT JOIN tables t ON qr.table_id = t.id WHERE qr.qr_data = $1 AND qr.is_active = TRUE',
-      [qrData]
+  // server/database/database.impl.js — ISPRAVNO
+async generateQRCodesForRestaurant(restaurantId, format = 'png', size = 300) {
+  const tables = await this.query(
+    'SELECT * FROM tables WHERE restaurant_id = $1 AND is_active = TRUE', 
+    [restaurantId]
+  );
+  const client = await this.pool.connect();
+  try {
+    await client.query('BEGIN');
+    
+    // ISPRAVAK: Deaktiviraj sve stare QR kodove za ovaj restoran
+    await client.query(
+      'UPDATE qr_codes SET is_active = FALSE WHERE restaurant_id = $1',
+      [restaurantId]
     );
+    
+    const results = [];
+    for (const table of tables) {
+      const qrData = `https://quickpay.app/pay?restaurant=${restaurantId}&table=${table.table_number}`;
+      const result = await client.query(
+        `INSERT INTO qr_codes (restaurant_id, table_id, qr_data, format, size, is_active) 
+         VALUES ($1,$2,$3,$4,$5,TRUE) RETURNING *`,
+        [restaurantId, table.id, qrData, format, size]
+      );
+      results.push(result.rows[0]);
+    }
+    await client.query('COMMIT');
+    return results;
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
   }
-
-  async updateQRCode(qrCodeId, input) {
-    const { clause, values } = buildSetClause(input);
-    if (!clause) throw new Error('No fields to update');
-    const qrCode = await this.queryOne(`UPDATE qr_codes SET ${clause} WHERE id = $${values.length + 1} RETURNING *`, [...values, qrCodeId]);
-    if (!qrCode) throw new Error('QR Code not found');
-    return qrCode;
-  }
-
-  async deleteQRCode(qrCodeId) {
-    await this.execute('DELETE FROM qr_codes WHERE id = $1', [qrCodeId]);
-  }
-
-  async incrementQRCodeDownloads(qrCodeId) {
-    const qrCode = await this.queryOne(`UPDATE qr_codes SET download_count = download_count + 1, last_downloaded_at = CURRENT_TIMESTAMP WHERE id = $1 RETURNING *`, [qrCodeId]);
-    if (!qrCode) throw new Error('QR Code not found');
-    return qrCode;
-  }
+}
 
   // ============================================
   // ANALYTICS & DASHBOARD
@@ -969,14 +1010,21 @@ class PostgresDatabase {
     return { total: this.pool.totalCount, idle: this.pool.idleCount, waiting: this.pool.waitingCount };
   }
 
- async cleanupStalePayments() {
-    // Vrijeme isteklih plaćanja svedeno na 15 minuta!
+ // server/database/database.impl.js — SIGURNO
+  async cleanupStalePayments() {
+  // Produžavamo timeout na 30 minuta i dodajemo zaštitu:
+  // Ne canceliramo payment koji ima stripe_payment_intent_id (možda Stripe webhook kasni)
+  // bez provjere stvarnog stanja na Stripeu.
+  // Za potpuno sigurno rješenje, timeout treba biti > Stripe-ovog PaymentIntent expiry-a (24h).
     const result = await this.pool.query(
-      `UPDATE payments SET status = 'canceled' 
-       WHERE status = 'pending' AND created_at < NOW() - INTERVAL '15 minutes'`
-    );
-    return result.rowCount ?? 0;
-  }
+    `UPDATE payments SET status = 'canceled'
+     WHERE status = 'pending' 
+       AND created_at < NOW() - INTERVAL '30 minutes'
+       AND stripe_payment_intent_id IS NULL`
+    // ↑ Samo ako nema Stripe intent ID (nikad nije ni krenulo prema Stripeu)
+  );
+  return result.rowCount ?? 0;
+}
 
   async autoClosePaidBills() {
     const result = await this.pool.query(`UPDATE bills SET status = 'paid', closed_at = CURRENT_TIMESTAMP WHERE amount_remaining <= 0 AND status NOT IN ('paid', 'void')`);

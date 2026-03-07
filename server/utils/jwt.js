@@ -2,7 +2,10 @@
 const jwt = require('jsonwebtoken');
 
 const JWT_SECRET = process.env.JWT_SECRET;
-const REFRESH_TOKEN_SECRET = process.env.REFRESH_TOKEN_SECRET || (JWT_SECRET + '_refresh_secret'); 
+const REFRESH_TOKEN_SECRET = process.env.REFRESH_TOKEN_SECRET;
+if (!REFRESH_TOKEN_SECRET) {
+  throw new Error('REFRESH_TOKEN_SECRET_NOT_DEFINED');
+}
 
 const JWT_EXPIRES_IN = '15m'; // 15 minuta
 const REFRESH_EXPIRES_IN = '7d'; // 7 dana

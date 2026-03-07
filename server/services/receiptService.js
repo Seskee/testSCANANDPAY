@@ -135,30 +135,38 @@ const updateReceiptEmail = async (receiptId, email) => {
 
 const getReceiptStatistics = async (restaurantId, startDate, endDate) => {
   const db = getDB();
-  const result = await db.getReceipts(
-    {
-      restaurant_id: restaurantId,
-      date_from: startDate ? new Date(startDate) : undefined,
-      date_to:   endDate   ? new Date(endDate)   : undefined,
-    },
-    { limit: 10000, page: 1 }
+
+  const conditions = ['r.restaurant_id = $1'];
+  const params = [restaurantId];
+  let idx = 2;
+
+  if (startDate) { conditions.push(`r.created_at >= $${idx++}`); params.push(new Date(startDate)); }
+  if (endDate)   { conditions.push(`r.created_at <= $${idx++}`); params.push(new Date(endDate)); }
+
+  const where = conditions.join(' AND ');
+
+  const result = await db.queryOne(
+    `SELECT
+       COUNT(r.id)::int                                                  AS total_receipts,
+       COALESCE(SUM((r.receipt_data->>'totalAmount')::numeric), 0)::float AS total_revenue,
+       COALESCE(SUM((r.receipt_data->>'tipAmount')::numeric), 0)::float   AS total_tips,
+       COUNT(r.id) FILTER (WHERE r.email_status = 'sent')::int            AS emails_sent,
+       COUNT(r.id) FILTER (WHERE r.email_status = 'failed')::int          AS emails_failed
+     FROM receipts r
+     WHERE ${where}`,
+    params
   );
-  const receipts = result.data;
-  const totalRevenue = receipts.reduce((s, r) => {
-    const d = typeof r.receipt_data === 'string' ? JSON.parse(r.receipt_data) : r.receipt_data;
-    return s + (d?.totalAmount || 0);
-  }, 0);
-  const totalTips = receipts.reduce((s, r) => {
-    const d = typeof r.receipt_data === 'string' ? JSON.parse(r.receipt_data) : r.receipt_data;
-    return s + (d?.tipAmount || 0);
-  }, 0);
+
+  const totalReceipts = result.total_receipts || 0;
+  const totalRevenue  = result.total_revenue  || 0;
+
   return {
-    totalReceipts: receipts.length,
-    totalRevenue, totalTips,
-    emailsSent:   receipts.filter(r => r.email_status === 'sent').length,
-    emailsFailed: receipts.filter(r => r.email_status === 'failed').length,
-    averageOrderValue: receipts.length > 0 ? totalRevenue / receipts.length : 0,
+    totalReceipts,
+    totalRevenue,
+    totalTips:         result.total_tips    || 0,
+    emailsSent:        result.emails_sent   || 0,
+    emailsFailed:      result.emails_failed || 0,
+    averageOrderValue: totalReceipts > 0 ? Number((totalRevenue / totalReceipts).toFixed(2)) : 0,
   };
 };
-
 module.exports = { generateReceipt, sendReceiptEmail, getReceiptById, getReceiptByNumber, getReceiptByPaymentId, getRestaurantReceipts, resendReceiptEmail, updateReceiptEmail, getReceiptStatistics };

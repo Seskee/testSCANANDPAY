@@ -4,8 +4,10 @@ const router = express.Router();
 const { randomUUID } = require('crypto');
 const paymentService = require('../services/paymentService');
 const { authenticateToken } = require('./middleware/auth');
-const { getDB } = require('../config/database'); 
+const { getDB } = require('../config/database');
 const { requireRestaurantOwnership } = require('./middleware/ownershipMiddleware');
+// 🔒 NOVO: Uvozimo paymentLimiter
+const { paymentLimiter } = require('./middleware/rateLimiter');
 
 // HELPER: Sigurnosna provjera vlasništva restorana nad uplatom
 const verifyPaymentOwnership = async (paymentId, userId) => {
@@ -19,13 +21,39 @@ const verifyPaymentOwnership = async (paymentId, userId) => {
   return true;
 };
 
-// PUBLIC RUTA
-router.post('/create', async (req, res) => {
+// 🔒 GDPR: Validacija email formata
+const isValidEmail = (email) => {
+  if (!email || typeof email !== 'string') return false;
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  return emailRegex.test(email.trim()) && email.length <= 254;
+};
+
+// PUBLIC RUTA — 🔒 ZAŠTIĆENA rate limiterom + GDPR validacijom
+router.post('/create', paymentLimiter, async (req, res) => {
   try {
-    const { billId, items, tip, paymentMethod, customerEmail } = req.body;
+    const { billId, items, tip, paymentMethod, customerEmail, gdprConsent } = req.body;
+
     if (tip !== undefined && (typeof tip !== 'number' || tip < 0 || tip > 10000)) {
       return res.status(400).json({ error: 'Tip must be a valid positive number' });
     }
+
+    // 🔒 GDPR (Uredba EU 2016/679, čl. 6 i 7):
+    // Email smijemo pohraniti SAMO uz eksplicitnu privolu gosta.
+    // Ako je email poslan bez gdprConsent: true — odbijamo zahtjev.
+    if (customerEmail) {
+      if (!isValidEmail(customerEmail)) {
+        return res.status(400).json({ error: 'Invalid email address format' });
+      }
+      if (!gdprConsent) {
+        return res.status(400).json({
+          error: 'GDPR_CONSENT_REQUIRED',
+          message: 'Explicit consent is required to store your email address for receipt delivery.'
+        });
+      }
+    }
+
+    // Ako nema privole ili emaila — pohranimo null (ne smijemo čuvati bez privole)
+    const emailToStore = (customerEmail && gdprConsent) ? customerEmail.trim() : null;
 
     const idempotencyKey = req.headers['idempotency-key'] || req.body.idempotencyKey;
     if (!idempotencyKey && (!billId || !billId.startsWith('demo-'))) {
@@ -43,7 +71,7 @@ router.post('/create', async (req, res) => {
       });
     }
 
-    const result = await paymentService.createPayment(billId, { items, tip, paymentMethod, customerEmail, idempotencyKey });
+    const result = await paymentService.createPayment(billId, { items, tip, paymentMethod, customerEmail: emailToStore, idempotencyKey });
     res.status(201).json({
       paymentId: result.payment._id || result.payment.id,
       clientSecret: result.clientSecret,
@@ -78,7 +106,7 @@ router.get('/status/:paymentId', async (req, res) => {
       return res.status(200).json({ status: 'succeeded' });
     }
     const db = getDB();
-    const payment = await db.queryOne('SELECT status FROM payments WHERE id = $1',[paymentId]);
+    const payment = await db.queryOne('SELECT status FROM payments WHERE id = $1', [paymentId]);
     if (!payment) return res.status(404).json({ error: 'Payment not found' });
     res.status(200).json({ status: payment.status });
   } catch (error) {
@@ -123,7 +151,7 @@ router.get('/restaurant/:restaurantId/statistics', authenticateToken, requireRes
 // PRIVATE RUTA - ONEMOGUĆEN PARCIJALNI REFUND
 router.post('/refund/:paymentId', authenticateToken, async (req, res) => {
   try {
-    await verifyPaymentOwnership(req.params.paymentId, req.user._id); // Dodana provjera
+    await verifyPaymentOwnership(req.params.paymentId, req.user._id);
     if (req.body.amount) {
       return res.status(400).json({ error: 'Partial refunds are strictly prohibited via this API.' });
     }

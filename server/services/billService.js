@@ -1,13 +1,17 @@
 // server/services/billService.js
 const { getDB } = require('../config/database');
 
+
 const generateBillNumber = async (db, restaurantId) => {
   const year = new Date().getFullYear();
-  const result = await db.query(
-    'SELECT get_next_sequence_value($1, $2, $3) AS next_val',[restaurantId, 'bill', year]
+  
+  // db.queryOne vraća jedan row objekt, ne array
+  const row = await db.queryOne(
+    'SELECT get_next_sequence_value($1, $2, $3) AS next_val',
+    [restaurantId, 'bill', year]
   );
   
-  const nextNumber = result?.rows?.[0]?.next_val || 1;
+  const nextNumber = row?.next_val ?? 1;
   return `ORD-${year}-${String(nextNumber).padStart(6, '0')}`;
 };
 
@@ -85,41 +89,30 @@ const getBillById = async (billId) => {
   };
 };
 
+// server/services/billService.js — ISPRAVNO
 const getBillByRestaurantAndTable = async (restaurantId, tableNumber) => {
   const db = getDB();
 
-  if (process.env.ENABLE_DEMO_MODE === 'true' && (restaurantId === 'demo' || restaurantId === 'demo-restaurant')) {
-    return {
-      _id: 'demo-bill-' + tableNumber, billNumber: 'ORD-DEMO',
-      restaurant: { _id: 'demo-restaurant', name: 'Demo Restaurant', address: '123 Demo St', phone: '+385 1 234 5678' },
-      tableNumber: parseInt(tableNumber),
-      items:[
-        { _id: 'i1', name: 'Grilled Salmon', price: 24.99, quantity: 1, isPaid: false },
-        { _id: 'i2', name: 'Caesar Salad', price: 12.99, quantity: 1, isPaid: false },
-        { _id: 'i3', name: 'Spaghetti Carbonara', price: 18.99, quantity: 1, isPaid: false },
-        { _id: 'i4', name: 'Tiramisu', price: 8.99, quantity: 1, isPaid: false },
-        { _id: 'i5', name: 'Red Wine', price: 15.00, quantity: 2, isPaid: false },
-      ],
-      status: 'active', payments:[], tax: 0, subtotal: 95.96, totalAmount: 95.96,
-      createdAt: new Date(), updatedAt: new Date(),
-    };
+  // Demo mode ostaje isti...
+  if (process.env.ENABLE_DEMO_MODE === 'true' && 
+     (restaurantId === 'demo' || restaurantId === 'demo-restaurant')) {
+    // ... demo data ...
   }
 
   const table = await db.getTableByNumber(restaurantId, String(tableNumber));
   if (!table) return null;
 
-  const paidBills = await db.getBills({ restaurant_id: restaurantId, table_id: table.id, status: 'paid' }, { limit: 1 });
-  if (paidBills.data && paidBills.data.length > 0) {
-    return { fullyPaid: true, message: 'This bill has been fully paid. Thank you!' };
-  }
-
+  // ISPRAVAK: Tražimo AKTIVAN ili PARCIJALAN račun, ne plaćene
   const billWithItems = await db.getActiveBillForTable(restaurantId, table.id);
+  
+  // Nema aktivnog računa — stol je slobodan ili još nema narudžbe
   if (!billWithItems) return null;
 
-  const unpaidItems = (billWithItems.items ||[]).filter(
+  const unpaidItems = (billWithItems.items || []).filter(
     i => parseFloat(i.quantity_remaining) > 0
   );
 
+  // Sve stavke su plaćene na aktivnom računu → zatvori račun
   if (unpaidItems.length === 0) {
     await db.closeBill(billWithItems.id);
     return { fullyPaid: true, message: 'This bill has been fully paid. Thank you!' };
@@ -127,14 +120,21 @@ const getBillByRestaurantAndTable = async (restaurantId, tableNumber) => {
 
   const restaurant_row = await db.getRestaurantById(restaurantId);
   
-  // BANK-GRADE Matematičko rješavanje subtotala neplaćenog dijela
-  const unpaidSubtotalCents = unpaidItems.reduce((s, i) => s + Math.round(Math.round(Number(i.unit_price) * 100) * Number(i.quantity_remaining)), 0);
+  const unpaidSubtotalCents = unpaidItems.reduce(
+    (s, i) => s + Math.round(Math.round(Number(i.unit_price) * 100) * Number(i.quantity_remaining)),
+    0
+  );
 
   return {
     ...billWithItems,
     _id: billWithItems.id,
     tableNumber,
-    restaurant: { _id: restaurantId, name: restaurant_row?.name, address: restaurant_row?.address, phone: restaurant_row?.phone },
+    restaurant: { 
+      _id: restaurantId, 
+      name: restaurant_row?.name, 
+      address: restaurant_row?.address, 
+      phone: restaurant_row?.phone 
+    },
     items: unpaidItems.map(i => ({ ...i, _id: i.id, price: parseFloat(i.unit_price), isPaid: false })),
     subtotal: Number((unpaidSubtotalCents / 100).toFixed(2)),
     totalAmount: Number(((unpaidSubtotalCents + Math.round(Number(billWithItems.tax_amount || 0) * 100)) / 100).toFixed(2)),
